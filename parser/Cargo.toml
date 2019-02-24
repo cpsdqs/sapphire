@@ -1,0 +1,9 @@
+[package]
+name = "sapphire-parser"
+version = "0.1.0"
+authors = ["cpsdqs <cpsdqs@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+nom = "4.2"
+sapphire-parser-gen = { path = "parser-gen" }
