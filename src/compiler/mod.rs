@@ -32,7 +32,7 @@ impl fmt::Display for OwnedParseError {
 /// Compiles Ruby source code.
 pub fn compile(input: String) -> Result<(), OwnedParseError> {
     let input = Box::new(input);
-    // this, tokens_ref and state_ref are safe because the referenced values will never be moved out
+    // this and tokens_ref are safe because the referenced values will never be moved out
     // of their boxes
     // TODO: use Pin when that becomes stable maybe
     let input_ref = unsafe { &*(&*input as *const String) };

@@ -363,7 +363,7 @@ pub enum Quoted<'input> {
     Interpolated(Vec<Spanned<Token<'input>, usize, Err<&'input str>>>),
 }
 
-named!(peek_nalpha<&str, ()>, not!(alphanumeric1));
+named!(peek_nalpha<&str, ()>, alt_complete!(not!(alphanumeric1) | do_parse!(eof!() >> ())));
 
 named!(keyword<&str, Token>, do_parse!(token: alt_complete!(
     do_parse!(tag!("__LINE__") >> (Token::K__LINE__))

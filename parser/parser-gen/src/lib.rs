@@ -647,10 +647,7 @@ impl Rule {
             pattern.push((name, item));
         }
 
-        Ok(Some(Rule {
-            pattern,
-            handler,
-        }))
+        Ok(Some(Rule { pattern, handler }))
     }
 
     fn gen_pattern(pattern: &[(Option<Ident>, PatternItem)], err_name: &Ident) -> TokenStream {

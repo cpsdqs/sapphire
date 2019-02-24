@@ -6,8 +6,6 @@
 //! > [pest](https://crates.io/crates/pest) had complaints about all the left-recursion.
 //! > So here’s a nom-style parser.
 
-// TODO: deal with quoted string literals
-
 use crate::ast::*;
 use crate::lex::{Item, Token};
 use nom::call;
@@ -173,7 +171,7 @@ def_token_type! {
 type IResult<'input, T> = Result<(Cursor<'input>, T), ParseError<'input>>;
 
 /// A cursor in a list of tokens.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cursor<'input, State = &'input RefCell<ParseState<'input>>> {
     buffer: &'input [Item<'input>],
     pos: usize,
@@ -258,7 +256,7 @@ impl<'input> ParseState<'input> {
 }
 
 /// Describes an expected token.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expected {
     Token(TokenType),
     OneOfToken(&'static [TokenType]),
@@ -480,15 +478,8 @@ impl fmt::Display for Expected {
     }
 }
 
-// TODO: maybe display errors with the nonterminal that got the farthest up to the point where it
-// fails because it doesn’t make much sense to say “unexpected def” for a missing “end” token.
-// something like:
-//  1 | def puts 'a'
-//      ^--------^^^
-// unexpected string literal while parsing method definition; expected (, identifier, or separator
-
 /// A parse error.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParseError<'input> {
     Unexpected(Cursor<'input, ()>, Expected),
     Alt(Box<ParseError<'input>>, Vec<ParseError<'input>>),
@@ -498,50 +489,55 @@ impl<'input> ParseError<'input> {
     fn alt_merge(self, alt: ParseError<'input>) -> ParseError<'input> {
         match self {
             ParseError::Alt(a, mut v) => {
-                if let (ParseError::Unexpected(_, e), Some(ParseError::Unexpected(c, f))) =
-                    (&alt, v.last_mut())
-                {
-                    match f {
-                        Expected::OneOf(one_of) => one_of.push(e.clone()),
-                        f => {
-                            *v.last_mut().unwrap() = ParseError::Unexpected(
-                                *c,
-                                Expected::OneOf(vec![f.clone(), e.clone()]),
-                            )
-                        }
-                    }
-                } else {
-                    v.push(alt);
-                }
+                v.push(alt);
                 ParseError::Alt(a, v)
             }
             _ => panic!("invalid alt-merge"),
         }
     }
 
-    fn pos(&self) -> Cursor<'input, ()> {
+    fn cursor(&self) -> Cursor<'input, ()> {
         match self {
             ParseError::Unexpected(p, ..) => *p,
-            ParseError::Alt(p, ..) => p.pos(),
+            ParseError::Alt(p, ..) => p.cursor(),
         }
     }
 
-    /// Drops all sub-errors.
+    /// Returns the error from the most successful parser.
+    fn most_successful(&self) -> &ParseError<'input> {
+        match self {
+            // TODO: use alt-merged if multiple errors have the same position
+            ParseError::Alt(err, sub_errors) => sub_errors
+                .iter()
+                .max_by_key(|err| err.cursor().pos)
+                .unwrap_or(err),
+            err => err,
+        }
+    }
+
+    /// Replaces this error with the result of [`most_successful`}.
     ///
     /// Without this, parse errors got ridiculously large and were practically useless walls of
     /// text.
     fn reduce(self) -> ParseError<'input> {
         match self {
-            ParseError::Alt(err, _) => *err,
+            ParseError::Alt(err, sub_errors) => {
+                // pick the error from the sub-parser that was most successful (got the furthest)
+                sub_errors
+                    .into_iter()
+                    .max_by_key(|err| err.cursor().pos)
+                    .unwrap_or(*err)
+            }
             err => err,
         }
     }
 
-    pub fn fmt_with_src(&self, src: &str) -> String {
-        let (begin, end) = match self.pos().get() {
+    /// Returns the error line number, line, and inline range of the error in characters.
+    fn error_line<'a>(&self, src: &'a str) -> (usize, &'a str, (usize, usize)) {
+        let (begin, end) = match self.cursor().get() {
             Some(Ok((begin, _, end))) => (*begin, *end),
             Some(Err(_)) => {
-                let cursor = self.pos();
+                let cursor = self.cursor();
                 let mut end = 0;
                 for i in 0..cursor.pos {
                     match cursor.buffer.get(cursor.pos - i) {
@@ -555,35 +551,201 @@ impl<'input> ParseError<'input> {
                 }
                 (end, end + 1)
             }
-            None => (0, src.len()),
+            None => (src.len(), src.len()),
         };
-
-        // FIXME: begin and end are byte indices, not char indices
 
         let mut line_number = 1;
         let mut line_byte_bounds = 0..src.len();
-        for (p, c) in src.char_indices() {
+        for (i, c) in src.char_indices() {
             if c == '\n' {
-                if p <= begin {
-                    line_byte_bounds.start = p + 1;
+                if i <= begin {
+                    line_byte_bounds.start = i + 1;
                     line_number += 1;
                 }
-                if p >= end && p < line_byte_bounds.end {
-                    line_byte_bounds.end = p;
+                if i >= end && i < line_byte_bounds.end {
+                    line_byte_bounds.end = i;
+                    break;
                 }
             }
         }
-        let inline_start = begin - line_byte_bounds.start;
-        let inline_end = end - line_byte_bounds.start;
+        let inline_start_bytes = begin - line_byte_bounds.start;
+        let inline_end_bytes = end - line_byte_bounds.start;
+
         let line = &src[line_byte_bounds];
 
+        let inline_start = line
+            .char_indices()
+            .enumerate()
+            .find(|(_, (byte_pos, _))| *byte_pos == inline_start_bytes)
+            .map(|(char_pos, _)| char_pos)
+            .unwrap_or_else(|| line.chars().count());
+        let inline_end = line
+            .char_indices()
+            .enumerate()
+            .find(|(_, (byte_pos, _))| *byte_pos == inline_end_bytes)
+            .map(|(char_pos, _)| char_pos)
+            .unwrap_or_else(|| line.chars().count());
+
+        (line_number, line, (inline_start, inline_end))
+    }
+
+    /// Formats a line with arrows like this:
+    ///
+    /// ```text
+    ///  23 | def a, b, *c; end
+    ///       ^-------------^^^
+    /// @     |-super_start | |-end
+    /// @                   |-start
+    /// ```
+    ///
+    /// Returns the formatted line and the line prefix length.
+    ///
+    /// # Panics
+    /// - if not `super_start <= start <= end`
+    fn fmt_line_with_arrows(
+        line_number: usize,
+        line: &str,
+        super_start: usize,
+        start: usize,
+        end: usize,
+        ansi: bool,
+    ) -> (String, usize) {
         let line_prefix = format!(" {} | ", line_number);
-        let arrow_prefix = " ".repeat(line_prefix.len() + inline_start);
-        let arrows = "^".repeat((inline_end - inline_start).max(1));
-        format!(
-            "{}{}\n{}{}\n{}",
-            line_prefix, line, arrow_prefix, arrows, self
+        let line_prefix_len = line_prefix.len();
+        let line_prefix = if ansi {
+            format!("\x1b[1;34m{}\x1b[m", line_prefix)
+        } else {
+            line_prefix
+        };
+
+        let line_fmt = if ansi {
+            let mut contents = String::new();
+            for (i, c) in line.char_indices() {
+                if i == start {
+                    contents += "\x1b[31m";
+                }
+                if i == end {
+                    contents += "\x1b[m";
+                }
+                contents.push(c);
+            }
+            contents
+        } else {
+            String::from(line)
+        };
+
+        let arrow_prefix = " ".repeat(line_prefix_len + super_start);
+        let super_arrows = if start - super_start == 0 {
+            String::new()
+        } else {
+            let dashes = "-".repeat((start - super_start).saturating_sub(1));
+            if ansi {
+                format!("\x1b[31m^{}\x1b[m", dashes)
+            } else {
+                format!("^{}", dashes)
+            }
+        };
+        let arrows = {
+            let plain = "^".repeat((end - start).max(1));
+            if ansi {
+                format!("\x1b[1;31m{}\x1b[m", plain)
+            } else {
+                plain
+            }
+        };
+        (
+            format!(
+                "{}{}\n{}{}{}",
+                line_prefix, line_fmt, arrow_prefix, super_arrows, arrows,
+            ),
+            line_prefix_len,
         )
+    }
+
+    /// Formats this error with the source code, showing a preview of the error line highlighting
+    /// the unexpected token.
+    ///
+    /// If `ansi` is set to true, this will use ANSI escape codes for fancy formatting.
+    pub fn fmt_with_src(&self, src: &str, ansi: bool) -> String {
+        match self {
+            ParseError::Unexpected(..) => {
+                let (ln, line, (start, end)) = self.error_line(src);
+                let (line, _) = Self::fmt_line_with_arrows(ln, line, start, start, end, ansi);
+                if ansi {
+                    format!("{} \x1b[31m{}\x1b[m", line, self)
+                } else {
+                    format!("{} {}", line, self)
+                }
+            }
+            ParseError::Alt(top, _) => {
+                let (top_ln, top_line, (top_start, _)) = top.error_line(src);
+                let err = self.most_successful();
+                if err == &**top {
+                    return top.fmt_with_src(src, ansi);
+                }
+                let (ln, line, (start, end)) = err.error_line(src);
+                if top_ln == ln {
+                    // format like
+                    //  1 | code code code
+                    //      ^---------^^^^ err
+                    let (line, prefix_len) =
+                        Self::fmt_line_with_arrows(ln, line, top_start, start, end, ansi);
+                    let top_line_pre = " ".repeat(prefix_len + top_start);
+                    let top_line =
+                        format!("{}(while parsing {})", top_line_pre, top.fmt_expected());
+                    if ansi {
+                        format!("{} \x1b[31m{}\n{}\x1b[m", line, err, top_line)
+                    } else {
+                        format!("{} {}\n{}", line, err, top_line)
+                    }
+                } else {
+                    // format like
+                    //  1 | code
+                    // .. |
+                    //  4 | code code code
+                    //                ^^^^ err
+                    let (top_line, top_prefix_len) =
+                        Self::fmt_line_with_arrows(top_ln, top_line, 0, 0, 0, ansi);
+                    // only need the line part (yes this is a bit hacky)
+                    let top_line = top_line.split("\n").next().unwrap();
+                    let (line, prefix_len) =
+                        Self::fmt_line_with_arrows(ln, line, start, start, end, ansi);
+
+                    let mut result = String::new();
+                    if prefix_len > top_prefix_len {
+                        result += &" ".repeat(prefix_len - top_prefix_len);
+                    }
+                    result += &top_line;
+                    result.push('\n');
+
+                    if ln > top_ln + 1 {
+                        result += &" ".repeat(prefix_len.max(top_prefix_len).saturating_sub(3));
+                        result += if ansi { "\x1b[1;34m..\x1b[m\n" } else { "..\n" };
+                    }
+
+                    if top_prefix_len > prefix_len {
+                        result += &" ".repeat(top_prefix_len - prefix_len);
+                    }
+                    result += &line;
+                    result += &if ansi {
+                        format!(
+                            " \x1b[31m{}\n{}(while parsing {})\x1b[m",
+                            err,
+                            " ".repeat(prefix_len.max(top_prefix_len)),
+                            top.fmt_expected()
+                        )
+                    } else {
+                        format!(
+                            " {}\n{}(while parsing {})",
+                            err,
+                            " ".repeat(prefix_len.max(top_prefix_len)),
+                            top.fmt_expected()
+                        )
+                    };
+                    result
+                }
+            }
+        }
     }
 
     fn fmt_expected(&self) -> String {
@@ -601,12 +763,12 @@ impl<'input> ParseError<'input> {
                             0 => f += &sub_error.fmt_expected(),
                             _ if index == sub_errors.len() - 1 => {
                                 if sub_errors.len() > 2 {
-                                    write!(f, ", or {}", sub_error).unwrap();
+                                    write!(f, ", or {}", sub_error.fmt_expected()).unwrap();
                                 } else {
-                                    write!(f, " or {}", sub_error).unwrap();
+                                    write!(f, " or {}", sub_error.fmt_expected()).unwrap();
                                 }
                             }
-                            _ => write!(f, ", {}", sub_error).unwrap(),
+                            _ => write!(f, ", {}", sub_error.fmt_expected()).unwrap(),
                         }
                     }
                 }
@@ -2535,13 +2697,17 @@ fn parser() {
         ($input:expr) => {{
             match parse(&Lexer::new($input).collect::<Vec<_>>()) {
                 Ok(parsed) => parsed,
-                Err(err) => panic!("parse error:\n{}\n--\n{}", $input, err.fmt_with_src($input)),
+                Err(err) => panic!(
+                    "parse error:\n{}\n--\n{}",
+                    $input,
+                    err.fmt_with_src($input, true)
+                ),
             }
         }};
     }
 
     assert_eq!(
-        lex_parse!("::Kernel.p 1, ('a ' + 'cat') => 2, a: 'a', &horse\n"),
+        lex_parse!("::Kernel.p 1, ('a ' + 'cat') => 2, a: 'a', &horse"),
         vec![Statement::Expr(Expression::Call {
             member: Some(Box::new(Expression::RootConst(Ident::Const(
                 "Kernel".into()
@@ -2575,7 +2741,7 @@ fn parser() {
     );
 
     assert_eq!(
-        lex_parse!("def a b,\nc\nend\n"),
+        lex_parse!("def a b,\nc\nend"),
         vec![Statement::Expr(Expression::Method {
             name: Ident::Local("a".into()),
             params: vec![
@@ -2592,7 +2758,7 @@ fn parser() {
     );
 
     assert_eq!(
-        lex_parse!("puts 'a' if true if false while true ? self : nil\n"),
+        lex_parse!("puts 'a' if true if false while true ? self : nil"),
         vec![Statement::WhileMod(
             Box::new(Statement::IfMod(
                 Box::new(Statement::IfMod(
@@ -2620,7 +2786,7 @@ fn parser() {
     );
 
     assert_eq!(
-        lex_parse!("a ? b : c ? d : e\n"),
+        lex_parse!("a ? b : c ? d : e"),
         vec![Statement::Expr(Expression::Ternary {
             cond: Box::new(Expression::Variable(Ident::Local("a".into()))),
             then: Box::new(Expression::Variable(Ident::Local("b".into()))),
@@ -2633,7 +2799,7 @@ fn parser() {
     );
 
     assert_eq!(
-        lex_parse!("a b c\n"),
+        lex_parse!("a b c"),
         vec![Statement::Expr(Expression::Call {
             member: None,
             name: Ident::Local("a".into()),
