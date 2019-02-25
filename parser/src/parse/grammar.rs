@@ -1,19 +1,107 @@
-//! The parser.
-//!
-//! > this parser is probably really inefficient
-//! > but [lalrpop](https://crates.io/crates/lalrpop) did not halt when compiling this grammar and
-//! > just kept consuming memory until it received sigkill from the system, and
-//! > [pest](https://crates.io/crates/pest) had complaints about all the left-recursion.
-//! > So here’s a nom-style parser.
-
+use super::error::{Expected, ParseError};
+use super::parse;
 use crate::ast::*;
 use crate::lex::{Item, Token};
 use nom::call;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::error::Error;
-use std::{fmt, iter, mem};
+use std::fmt;
+use std::iter;
 
+type IResult<'input, T> = Result<(Cursor<'input>, T), ParseError<'input>>;
+
+/// A cursor in a list of tokens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cursor<'input, State = &'input RefCell<ParseState<'input>>> {
+    buffer: &'input [Item<'input>],
+    pos: usize,
+    state: State,
+}
+
+impl<'input, T> Cursor<'input, T> {
+    pub(crate) fn get(&self) -> Option<&Item<'input>> {
+        self.buffer.get(self.pos)
+    }
+
+    fn at_end(&self) -> bool {
+        self.pos >= self.buffer.len() - 1
+    }
+
+    pub(crate) fn buffer(&self) -> &[Item<'input>] {
+        &self.buffer
+    }
+
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
+}
+
+impl<'input> Cursor<'input> {
+    /// Creates a new cursor with the given token list.
+    pub(crate) fn new(
+        buffer: &'input [Item<'input>],
+        state: &'input RefCell<ParseState<'input>>,
+    ) -> Cursor<'input> {
+        Cursor {
+            buffer,
+            pos: 0,
+            state: state,
+        }
+    }
+
+    fn cached_err(&self, symbol: &'static str) -> Option<ParseError<'input>> {
+        self.state
+            .borrow()
+            .cached_err(self.pos, symbol)
+            .map(|err| err.clone())
+    }
+
+    fn cache_err(&self, symbol: &'static str, err: ParseError<'input>) {
+        self.state.borrow_mut().cache_err(self.pos, symbol, err);
+    }
+
+    fn without_state(self) -> Cursor<'input, ()> {
+        Cursor {
+            buffer: self.buffer,
+            pos: self.pos,
+            state: (),
+        }
+    }
+}
+
+impl<'input> Iterator for Cursor<'input> {
+    type Item = &'input Token<'input>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.pos += 1;
+        match self.buffer.get(self.pos - 1) {
+            Some(Ok((_, token, _))) => Some(token),
+            _ => None,
+        }
+    }
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct ParseState<'input> {
+    cache: HashMap<(usize, &'static str), ParseError<'input>>,
+}
+
+impl<'input> ParseState<'input> {
+    pub fn new() -> RefCell<ParseState<'input>> {
+        RefCell::new(ParseState {
+            cache: HashMap::new(),
+        })
+    }
+
+    fn cached_err(&self, pos: usize, key: &'static str) -> Option<&ParseError<'input>> {
+        self.cache.get(&(pos, key))
+    }
+
+    fn cache_err(&mut self, pos: usize, key: &'static str, err: ParseError<'input>) {
+        self.cache.insert((pos, key), err);
+    }
+}
 macro_rules! def_token_type {
     ($($($p:pat)|+ => $i:ident => $f:expr,)+) => {
         /// Token types.
@@ -168,640 +256,6 @@ def_token_type! {
     Newlines => Newlines => "line break",
 }
 
-type IResult<'input, T> = Result<(Cursor<'input>, T), ParseError<'input>>;
-
-/// A cursor in a list of tokens.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Cursor<'input, State = &'input RefCell<ParseState<'input>>> {
-    buffer: &'input [Item<'input>],
-    pos: usize,
-    state: State,
-}
-
-impl<'input, T> Cursor<'input, T> {
-    fn get(&self) -> Option<&Item<'input>> {
-        self.buffer.get(self.pos)
-    }
-
-    fn at_end(&self) -> bool {
-        self.pos >= self.buffer.len() - 1
-    }
-}
-
-impl<'input> Cursor<'input> {
-    /// Creates a new cursor with the given token list.
-    fn new(
-        buffer: &'input [Item<'input>],
-        state: &'input RefCell<ParseState<'input>>,
-    ) -> Cursor<'input> {
-        Cursor {
-            buffer,
-            pos: 0,
-            state: state,
-        }
-    }
-
-    fn cached_err(&self, symbol: &'static str) -> Option<ParseError<'input>> {
-        self.state
-            .borrow()
-            .cached_err(self.pos, symbol)
-            .map(|err| err.clone())
-    }
-
-    fn cache_err(&self, symbol: &'static str, err: ParseError<'input>) {
-        self.state.borrow_mut().cache_err(self.pos, symbol, err);
-    }
-
-    fn without_state(self) -> Cursor<'input, ()> {
-        Cursor {
-            buffer: self.buffer,
-            pos: self.pos,
-            state: (),
-        }
-    }
-}
-
-impl<'input> Iterator for Cursor<'input> {
-    type Item = &'input Token<'input>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.pos += 1;
-        match self.buffer.get(self.pos - 1) {
-            Some(Ok((_, token, _))) => Some(token),
-            _ => None,
-        }
-    }
-}
-
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct ParseState<'input> {
-    cache: HashMap<(usize, &'static str), ParseError<'input>>,
-}
-
-impl<'input> ParseState<'input> {
-    pub fn new() -> RefCell<ParseState<'input>> {
-        RefCell::new(ParseState {
-            cache: HashMap::new(),
-        })
-    }
-
-    fn cached_err(&self, pos: usize, key: &'static str) -> Option<&ParseError<'input>> {
-        self.cache.get(&(pos, key))
-    }
-
-    fn cache_err(&mut self, pos: usize, key: &'static str, err: ParseError<'input>) {
-        self.cache.insert((pos, key), err);
-    }
-}
-
-/// Describes an expected token.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Expected {
-    Token(TokenType),
-    OneOfToken(&'static [TokenType]),
-    OneOf(Vec<Expected>),
-    Separator,
-    Expression,
-    Identifier,
-    NonConstantIdentifier,
-    Arguments,
-    PositionalArgument,
-    Block,
-    Lambda,
-    BlockParameterList,
-    SuperExpression,
-    YieldExpression,
-    AssignmentExpression,
-    AssignmentStatement,
-    SingleAssignmentExpression,
-    SingleAssignmentStatement,
-    ScopedConstantAssignmentExpression,
-    ScopedConstantAssignmentStatement,
-    SingleMethodAssignmentExpression,
-    SingleMethodAssignmentStatement,
-    AbbreviatedAssignmentExpression,
-    AbbreviatedAssignmentStatement,
-    AbbreviatedMethodAssignmentExpression,
-    AbbreviatedMethodAssignmentStatement,
-    MultipleAssignmentStatement,
-    OneToPackingAssignmentStatement,
-    ManyToManyAssignmentStatement,
-    LeftHandSide,
-    MultipleLeftHandSide,
-    MultipleLeftHandSideNotPacking,
-    MultipleLeftHandSideItem,
-    MultipleRightHandSide,
-    PrimaryExpression,
-    ThenClause,
-    CaseExpression,
-    WhenClause,
-    WhenArgument,
-    RescueClause,
-    ConditionalOperatorExpression,
-    DoClause,
-    ForVariable,
-    ExceptionClassList,
-    VariableReference,
-    ScopedConstantReference,
-    PseudoVariable,
-    RangeConstructor,
-    Statement,
-    RescueFallbackStatement,
-    ModulePath,
-    ClassPath,
-    DefinedMethodName,
-    MethodParameters,
-    MethodNameOrSymbol,
-    Singleton,
-    MethodParameterPart,
-    KeywordLogicalExpression,
-    KeywordNotExpression,
-    OperatorAndExpression,
-    OperatorOrExpression,
-    PrimaryMethodInvocation,
-    MethodName,
-    MethodInvocationWithoutParentheses,
-    Command,
-    ChainedMethodInvocation,
-    CommandWithDoBlock,
-    IndexingArgumentList,
-    ArgumentList,
-    LambdaParameter,
-    YieldWithOptionalArgument,
-    OperatorExpression,
-    UnaryMinusExpression,
-    UnaryExpression,
-    RelationalExpression,
-    BitwiseOrExpression,
-    BitwiseAndExpression,
-    BitwiseShiftExpression,
-    AdditiveExpression,
-    MultiplicativeExpression,
-    PowerExpression,
-    StatementNotAllowedInFallbackStatement,
-    ParameterList,
-    Parameter,
-    Association,
-}
-
-impl fmt::Display for Expected {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Expected::*;
-        match self {
-            Token(t) => write!(f, "{}", t),
-            OneOfToken(t) => {
-                for (index, item) in t.iter().enumerate() {
-                    match index {
-                        0 => write!(f, "{}", item)?,
-                        i if i == t.len() - 1 => {
-                            if t.len() > 2 {
-                                write!(f, ", or {}", item)?;
-                            } else {
-                                write!(f, " or {}", item)?;
-                            }
-                        }
-                        _ => write!(f, ", {}", item)?,
-                    }
-                }
-                Ok(())
-            }
-            OneOf(t) => {
-                for (index, item) in t.iter().enumerate() {
-                    match index {
-                        0 => write!(f, "{}", item)?,
-                        i if i == t.len() - 1 => {
-                            if t.len() > 2 {
-                                write!(f, ", or {}", item)?;
-                            } else {
-                                write!(f, " or {}", item)?;
-                            }
-                        }
-                        _ => write!(f, ", {}", item)?,
-                    }
-                }
-                Ok(())
-            }
-            Separator => write!(f, "separator"),
-            Expression => write!(f, "expression"),
-            Identifier => write!(f, "identifier"),
-            NonConstantIdentifier => write!(f, "non-constant identifier"),
-            Arguments => write!(f, "arguments"),
-            PositionalArgument => write!(f, "positional argument"),
-            Block => write!(f, "block"),
-            Lambda => write!(f, "lambda"),
-            BlockParameterList => write!(f, "block parameters"),
-            SuperExpression => write!(f, "super expression"),
-            YieldExpression => write!(f, "yield expression"),
-            AssignmentExpression => write!(f, "assignment expression"),
-            AssignmentStatement => write!(f, "assignment statement"),
-            SingleAssignmentExpression => write!(f, "single assignment expression"),
-            SingleAssignmentStatement => write!(f, "single assignment statement"),
-            ScopedConstantAssignmentExpression => {
-                write!(f, "scoped constant assignment expression")
-            }
-            ScopedConstantAssignmentStatement => write!(f, "scoped constant assignment statement"),
-            SingleMethodAssignmentExpression => write!(f, "single method assignment expression"),
-            SingleMethodAssignmentStatement => write!(f, "single method assignment statement"),
-            AbbreviatedAssignmentExpression => write!(f, "abbreviated assignment expression"),
-            AbbreviatedAssignmentStatement => write!(f, "abbreviated assignment statement"),
-            AbbreviatedMethodAssignmentExpression => {
-                write!(f, "abbreviated method assignment expression")
-            }
-            AbbreviatedMethodAssignmentStatement => {
-                write!(f, "abbreviated method assignment statement")
-            }
-            MultipleAssignmentStatement => write!(f, "multiple assignment statement"),
-            OneToPackingAssignmentStatement => write!(f, "one to packing assignment statement"),
-            ManyToManyAssignmentStatement => write!(f, "many to many assignment statement"),
-            LeftHandSide => write!(f, "left-hand side"),
-            MultipleLeftHandSide => write!(f, "multiple left-hand side"),
-            MultipleLeftHandSideNotPacking => write!(f, "multiple left-hand side (not packing)"),
-            MultipleLeftHandSideItem => write!(f, "multiple left-hand side item"),
-            MultipleRightHandSide => write!(f, "multiple right-hand side"),
-            PrimaryExpression => write!(f, "primary expression"),
-            ThenClause => write!(f, "then clause"),
-            CaseExpression => write!(f, "case expression"),
-            WhenClause => write!(f, "when clause"),
-            WhenArgument => write!(f, "when argument"),
-            RescueClause => write!(f, "rescue clause"),
-            ConditionalOperatorExpression => write!(f, "conditional operator expression"),
-            DoClause => write!(f, "do clause"),
-            ForVariable => write!(f, "for variable"),
-            ExceptionClassList => write!(f, "exception class list"),
-            VariableReference => write!(f, "variable reference"),
-            ScopedConstantReference => write!(f, "scoped constant reference"),
-            PseudoVariable => write!(f, "pseudo-variable"),
-            RangeConstructor => write!(f, "range constructor"),
-            Statement => write!(f, "statement"),
-            RescueFallbackStatement => write!(f, "rescue fallback statement"),
-            ModulePath => write!(f, "module path"),
-            ClassPath => write!(f, "class path"),
-            DefinedMethodName => write!(f, "defined method name"),
-            MethodParameters => write!(f, "method parameters"),
-            MethodNameOrSymbol => write!(f, "method name or symbol"),
-            Singleton => write!(f, "singleton expression"),
-            MethodParameterPart => write!(f, "method parameter part"),
-            KeywordLogicalExpression => write!(f, "expression (logical)"),
-            KeywordNotExpression => write!(f, "expression (not)"),
-            OperatorAndExpression => write!(f, "expression (&&)"),
-            OperatorOrExpression => write!(f, "expression (||)"),
-            PrimaryMethodInvocation => write!(f, "primary method invocation"),
-            MethodName => write!(f, "method name"),
-            MethodInvocationWithoutParentheses => {
-                write!(f, "method invocation without parentheses")
-            }
-            Command => write!(f, "command"),
-            ChainedMethodInvocation => write!(f, "chained method invocation"),
-            CommandWithDoBlock => write!(f, "command with do block"),
-            IndexingArgumentList => write!(f, "indexing argument list"),
-            ArgumentList => write!(f, "argument list"),
-            LambdaParameter => write!(f, "lambda parameter"),
-            YieldWithOptionalArgument => write!(f, "yield with optional argument"),
-            OperatorExpression => write!(f, "expression (operator)"),
-            UnaryMinusExpression => write!(f, "expression (unary minus)"),
-            UnaryExpression => write!(f, "expression (unary)"),
-            RelationalExpression => write!(f, "relational expression"),
-            BitwiseOrExpression => write!(f, "expression (bitwise or)"),
-            BitwiseAndExpression => write!(f, "expression (bitwise and)"),
-            BitwiseShiftExpression => write!(f, "expression (bitwise shift)"),
-            AdditiveExpression => write!(f, "expression (additive)"),
-            MultiplicativeExpression => write!(f, "expression (multiplicative)"),
-            PowerExpression => write!(f, "expression (power)"),
-            StatementNotAllowedInFallbackStatement => {
-                write!(f, "statement not allowed in fallback statement")
-            }
-            ParameterList => write!(f, "parameter list"),
-            Parameter => write!(f, "parameter"),
-            Association => write!(f, "association"),
-        }
-    }
-}
-
-/// A parse error.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParseError<'input> {
-    Unexpected(Cursor<'input, ()>, Expected),
-    Alt(Box<ParseError<'input>>, Vec<ParseError<'input>>),
-}
-
-impl<'input> ParseError<'input> {
-    fn alt_merge(self, alt: ParseError<'input>) -> ParseError<'input> {
-        match self {
-            ParseError::Alt(a, mut v) => {
-                v.push(alt);
-                ParseError::Alt(a, v)
-            }
-            _ => panic!("invalid alt-merge"),
-        }
-    }
-
-    fn cursor(&self) -> Cursor<'input, ()> {
-        match self {
-            ParseError::Unexpected(p, ..) => *p,
-            ParseError::Alt(p, ..) => p.cursor(),
-        }
-    }
-
-    /// Returns the error from the most successful parser.
-    fn most_successful(&self) -> &ParseError<'input> {
-        match self {
-            // TODO: use alt-merged if multiple errors have the same position
-            ParseError::Alt(err, sub_errors) => sub_errors
-                .iter()
-                .max_by_key(|err| err.cursor().pos)
-                .unwrap_or(err),
-            err => err,
-        }
-    }
-
-    /// Replaces this error with the result of [`most_successful`}.
-    ///
-    /// Without this, parse errors got ridiculously large and were practically useless walls of
-    /// text.
-    fn reduce(self) -> ParseError<'input> {
-        match self {
-            ParseError::Alt(err, sub_errors) => {
-                // pick the error from the sub-parser that was most successful (got the furthest)
-                sub_errors
-                    .into_iter()
-                    .max_by_key(|err| err.cursor().pos)
-                    .unwrap_or(*err)
-            }
-            err => err,
-        }
-    }
-
-    /// Returns the error line number, line, and inline range of the error in characters.
-    fn error_line<'a>(&self, src: &'a str) -> (usize, &'a str, (usize, usize)) {
-        let (begin, end) = match self.cursor().get() {
-            Some(Ok((begin, _, end))) => (*begin, *end),
-            Some(Err(_)) => {
-                let cursor = self.cursor();
-                let mut end = 0;
-                for i in 0..cursor.pos {
-                    match cursor.buffer.get(cursor.pos - i) {
-                        Some(Ok((_, _, e))) => {
-                            end = *e;
-                            break;
-                        }
-                        Some(Err(_)) => (),
-                        None => (),
-                    }
-                }
-                (end, end + 1)
-            }
-            None => (src.len(), src.len()),
-        };
-
-        let mut line_number = 1;
-        let mut line_byte_bounds = 0..src.len();
-        for (i, c) in src.char_indices() {
-            if c == '\n' {
-                if i <= begin {
-                    line_byte_bounds.start = i + 1;
-                    line_number += 1;
-                }
-                if i >= end && i < line_byte_bounds.end {
-                    line_byte_bounds.end = i;
-                    break;
-                }
-            }
-        }
-        let inline_start_bytes = begin - line_byte_bounds.start;
-        let inline_end_bytes = end - line_byte_bounds.start;
-
-        let line = &src[line_byte_bounds];
-
-        let inline_start = line
-            .char_indices()
-            .enumerate()
-            .find(|(_, (byte_pos, _))| *byte_pos == inline_start_bytes)
-            .map(|(char_pos, _)| char_pos)
-            .unwrap_or_else(|| line.chars().count());
-        let inline_end = line
-            .char_indices()
-            .enumerate()
-            .find(|(_, (byte_pos, _))| *byte_pos == inline_end_bytes)
-            .map(|(char_pos, _)| char_pos)
-            .unwrap_or_else(|| line.chars().count());
-
-        (line_number, line, (inline_start, inline_end))
-    }
-
-    /// Formats a line with arrows like this:
-    ///
-    /// ```text
-    ///  23 | def a, b, *c; end
-    ///       ^-------------^^^
-    /// @     |-super_start | |-end
-    /// @                   |-start
-    /// ```
-    ///
-    /// Returns the formatted line and the line prefix length.
-    ///
-    /// # Panics
-    /// - if not `super_start <= start <= end`
-    fn fmt_line_with_arrows(
-        line_number: usize,
-        line: &str,
-        super_start: usize,
-        start: usize,
-        end: usize,
-        ansi: bool,
-    ) -> (String, usize) {
-        let line_prefix = format!(" {} | ", line_number);
-        let line_prefix_len = line_prefix.len();
-        let line_prefix = if ansi {
-            format!("\x1b[1;34m{}\x1b[m", line_prefix)
-        } else {
-            line_prefix
-        };
-
-        let line_fmt = if ansi {
-            let mut contents = String::new();
-            for (i, c) in line.char_indices() {
-                if i == start {
-                    contents += "\x1b[31m";
-                }
-                if i == end {
-                    contents += "\x1b[m";
-                }
-                contents.push(c);
-            }
-            contents
-        } else {
-            String::from(line)
-        };
-
-        let arrow_prefix = " ".repeat(line_prefix_len + super_start);
-        let super_arrows = if start - super_start == 0 {
-            String::new()
-        } else {
-            let dashes = "-".repeat((start - super_start).saturating_sub(1));
-            if ansi {
-                format!("\x1b[31m^{}\x1b[m", dashes)
-            } else {
-                format!("^{}", dashes)
-            }
-        };
-        let arrows = {
-            let plain = "^".repeat((end - start).max(1));
-            if ansi {
-                format!("\x1b[1;31m{}\x1b[m", plain)
-            } else {
-                plain
-            }
-        };
-        (
-            format!(
-                "{}{}\n{}{}{}",
-                line_prefix, line_fmt, arrow_prefix, super_arrows, arrows,
-            ),
-            line_prefix_len,
-        )
-    }
-
-    /// Formats this error with the source code, showing a preview of the error line highlighting
-    /// the unexpected token.
-    ///
-    /// If `ansi` is set to true, this will use ANSI escape codes for fancy formatting.
-    pub fn fmt_with_src(&self, src: &str, ansi: bool) -> String {
-        match self {
-            ParseError::Unexpected(..) => {
-                let (ln, line, (start, end)) = self.error_line(src);
-                let (line, _) = Self::fmt_line_with_arrows(ln, line, start, start, end, ansi);
-                if ansi {
-                    format!("{} \x1b[31m{}\x1b[m", line, self)
-                } else {
-                    format!("{} {}", line, self)
-                }
-            }
-            ParseError::Alt(top, _) => {
-                let (top_ln, top_line, (top_start, _)) = top.error_line(src);
-                let err = self.most_successful();
-                if err == &**top {
-                    return top.fmt_with_src(src, ansi);
-                }
-                let (ln, line, (start, end)) = err.error_line(src);
-                if top_ln == ln {
-                    // format like
-                    //  1 | code code code
-                    //      ^---------^^^^ err
-                    let (line, prefix_len) =
-                        Self::fmt_line_with_arrows(ln, line, top_start, start, end, ansi);
-                    let top_line_pre = " ".repeat(prefix_len + top_start);
-                    let top_line =
-                        format!("{}(while parsing {})", top_line_pre, top.fmt_expected());
-                    if ansi {
-                        format!("{} \x1b[31m{}\n{}\x1b[m", line, err, top_line)
-                    } else {
-                        format!("{} {}\n{}", line, err, top_line)
-                    }
-                } else {
-                    // format like
-                    //  1 | code
-                    // .. |
-                    //  4 | code code code
-                    //                ^^^^ err
-                    let (top_line, top_prefix_len) =
-                        Self::fmt_line_with_arrows(top_ln, top_line, 0, 0, 0, ansi);
-                    // only need the line part (yes this is a bit hacky)
-                    let top_line = top_line.split("\n").next().unwrap();
-                    let (line, prefix_len) =
-                        Self::fmt_line_with_arrows(ln, line, start, start, end, ansi);
-
-                    let mut result = String::new();
-                    if prefix_len > top_prefix_len {
-                        result += &" ".repeat(prefix_len - top_prefix_len);
-                    }
-                    result += &top_line;
-                    result.push('\n');
-
-                    if ln > top_ln + 1 {
-                        result += &" ".repeat(prefix_len.max(top_prefix_len).saturating_sub(3));
-                        result += if ansi { "\x1b[1;34m..\x1b[m\n" } else { "..\n" };
-                    }
-
-                    if top_prefix_len > prefix_len {
-                        result += &" ".repeat(top_prefix_len - prefix_len);
-                    }
-                    result += &line;
-                    result += &if ansi {
-                        format!(
-                            " \x1b[31m{}\n{}(while parsing {})\x1b[m",
-                            err,
-                            " ".repeat(prefix_len.max(top_prefix_len)),
-                            top.fmt_expected()
-                        )
-                    } else {
-                        format!(
-                            " {}\n{}(while parsing {})",
-                            err,
-                            " ".repeat(prefix_len.max(top_prefix_len)),
-                            top.fmt_expected()
-                        )
-                    };
-                    result
-                }
-            }
-        }
-    }
-
-    fn fmt_expected(&self) -> String {
-        match self {
-            ParseError::Unexpected(_, e) => format!("{}", e),
-            ParseError::Alt(_, sub_errors) => {
-                use std::fmt::Write;
-
-                let mut f = String::new();
-                if sub_errors.len() == 1 {
-                    f += &sub_errors[0].fmt_expected();
-                } else {
-                    for (index, sub_error) in sub_errors.iter().enumerate() {
-                        match index {
-                            0 => f += &sub_error.fmt_expected(),
-                            _ if index == sub_errors.len() - 1 => {
-                                if sub_errors.len() > 2 {
-                                    write!(f, ", or {}", sub_error.fmt_expected()).unwrap();
-                                } else {
-                                    write!(f, " or {}", sub_error.fmt_expected()).unwrap();
-                                }
-                            }
-                            _ => write!(f, ", {}", sub_error.fmt_expected()).unwrap(),
-                        }
-                    }
-                }
-                f
-            }
-        }
-    }
-}
-
-impl<'input> fmt::Display for ParseError<'input> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ParseError::Unexpected(c, _) => match c.get() {
-                Some(Ok((_, t, _))) => write!(
-                    f,
-                    "unexpected {}; expected {}",
-                    TokenType::from(t),
-                    self.fmt_expected()
-                ),
-                Some(err) => write!(f, "lex error: {:?}", err),
-                None => write!(
-                    f,
-                    "unexpected end of input; expected {}",
-                    self.fmt_expected()
-                ),
-            },
-            ParseError::Alt(top, _) => write!(f, "{} (one of: {})", top, self.fmt_expected()),
-        }
-    }
-}
-
-impl<'input> Error for ParseError<'input> {}
-
 macro_rules! token {
     ($i:expr, $token_type:ident) => {{
         let mut i = $i.clone();
@@ -826,6 +280,7 @@ macro_rules! token {
         }
     }};
 }
+
 macro_rules! opt {
     ($i:expr, $submac:ident!($($args:tt)*)) => {{
         let i = $i.clone();
@@ -836,6 +291,7 @@ macro_rules! opt {
     }};
     ($i:expr, $f:expr) => (opt!($i, call!($f)));
 }
+
 macro_rules! many0 {
     ($i:expr, $submac:ident!($($args:tt)*)) => {{
         let mut res = Vec::new();
@@ -860,6 +316,7 @@ macro_rules! many0 {
     }};
     ($i:expr, $f:expr) => (many0!($i, call!($f)));
 }
+
 macro_rules! many1 {
     ($i:expr, $submac:ident!($($args:tt)*), err: $err:ident($($eargs:tt)*)) => {{
         match many0!($i, $submac!($($args)*)) {
@@ -875,6 +332,7 @@ macro_rules! many1 {
         many1!($i, call!($f), err: $err($($eargs)*))
     };
 }
+
 macro_rules! alt {
     ($i:expr, $submac:ident!($($args:tt)*), $($rest:tt)*) => {{
         let i = $i.clone();
@@ -896,6 +354,7 @@ macro_rules! alt {
         ))
     }};
 }
+
 macro_rules! not {
     ($i:expr, $submac:ident!($($args:tt)*); err: $err:ident($($eargs:tt)*)) => {{
         let i = $i.clone();
@@ -909,6 +368,7 @@ macro_rules! not {
         not!($i, call!($f); err: $err($($eargs)*))
     }};
 }
+
 macro_rules! do_parse {
     ($i:expr, $bind:ident: $submac:ident!($($args:tt)*) >> $($rest:tt)*) => {{
         match $submac!($i, $($args)*) {
@@ -933,6 +393,7 @@ macro_rules! do_parse {
         Ok(($i, $handler))
     }};
 }
+
 macro_rules! tail_rule {
     ($i:expr, $accum:ident -> $name:ident >> $($rest:tt)*) => {{
         let $name = $accum.clone();
@@ -942,6 +403,7 @@ macro_rules! tail_rule {
         do_parse!($i, $($rest)*)
     };
 }
+
 macro_rules! tail_rules {
     (
         $i:expr,
@@ -968,29 +430,16 @@ macro_rules! tail_rules {
         }
     }}
 }
+
 macro_rules! call_macro {
     ($i:expr, $submac:ident!($($args:tt)*)) => {{
         $submac!($i, $($args)*)
     }}
 }
 
-/// Parses a ruby program.
-pub fn parse<'input>(tokens: &'input [Item]) -> Result<StatementList, ParseError<'input>> {
-    let state = ParseState::new();
-    program(Cursor::new(tokens, &state))
-        .map(|(_, r)| r)
-        .map_err(|err| unsafe {
-            // Rust complains about a reference to the local variable `state` (above) being returned
-            // here, but because ParseError contains a Cursor<'input, ()>, there is actually no
-            // reference to state being returned.
-            // But apparently Rust won’t acknowledge that, so here’s a quick transmute to fix it:
-            mem::transmute::<ParseError<'_>, ParseError<'input>>(err)
-        })
-}
-
 // 10.1 Program
 /// Parses a program.
-fn program(mut i: Cursor) -> IResult<StatementList> {
+pub fn program(mut i: Cursor) -> IResult<StatementList> {
     if let Ok((j, _)) = ws(i) {
         i = j;
     }
@@ -1453,39 +902,6 @@ sapphire_parser_gen::parser! {
             iter::once(a).chain(b.into_iter()).collect()
         }
     }
-    /* ISO
-    indexing_argument_list: Arguments = {
-        c: command => (Arguments {
-            mandatory: vec![c],
-            optional: Vec::with_capacity(0),
-            array: None,
-            proc: None,
-        }),
-        m: operator_expression_list opt!(do_parse!(ws >> token!(PComma) >> ())) => (Arguments {
-            mandatory: m,
-            optional: Vec::with_capacity(0),
-            array: None,
-            proc: None,
-        }),
-        m: operator_expression_list ws token!(PComma) wss a: splatting_argument => (Arguments {
-            mandatory: m,
-            optional: Vec::with_capacity(0),
-            array: Some(Box::new(a)),
-            proc: None,
-        }),
-        o: association_list opt!(do_parse!(ws >> token!(PComma) >> ())) => (Arguments {
-            mandatory: Vec::with_capacity(0),
-            optional: o,
-            array: None,
-            proc: None,
-        }),
-        a: splatting_argument => (Arguments {
-            mandatory: Vec::with_capacity(0),
-            optional: Vec::with_capacity(0),
-            array: Some(Box::new(a)),
-            proc: None,
-        }),
-    } */
     splatting_argument: Expression = {
         token!(OMul) wss e: operator_expression => (e)
     }
@@ -1558,57 +974,6 @@ sapphire_parser_gen::parser! {
             }
         },
     }
-    /* ISO
-    argument_list: Arguments = {
-        b: block_argument => (Arguments {
-            mandatory: Vec::with_capacity(0),
-            optional: Vec::with_capacity(0),
-            array: None,
-            proc: Some(Box::new(b)),
-        }),
-        a: splatting_argument
-            b: opt!(do_parse!(wss >> token!(PComma) >> wss >> b: block_argument >> (b))) =>
-            (Arguments {
-                mandatory: Vec::with_capacity(0),
-                optional: Vec::with_capacity(0),
-                array: Some(Box::new(a)),
-                proc: b.map(Box::new),
-            }),
-        e: command => (Arguments {
-            mandatory: vec![e],
-            optional: Vec::with_capacity(0),
-            array: None,
-            proc: None,
-        }),
-        m: operator_expression_list ws token!(PComma) wss
-            o: association_list
-            a: opt!(do_parse!(ws >> token!(PComma) >> wss >> s: splatting_argument >> (s)))
-            b: opt!(do_parse!(ws >> token!(PComma) >> wss >> b: block_argument >> (b))) =>
-            (Arguments {
-                mandatory: m,
-                optional: o,
-                array: a.map(Box::new),
-                proc: b.map(Box::new),
-            }),
-        m: operator_expression_list
-            a: opt!(do_parse!(ws >> token!(PComma) >> wss >> s: splatting_argument >> (s)))
-            b: opt!(do_parse!(ws >> token!(PComma) >> wss >> b: block_argument >> (b))) =>
-            (Arguments {
-                mandatory: m,
-                optional: Vec::with_capacity(0),
-                array: a.map(Box::new),
-                proc: b.map(Box::new),
-            }),
-        o: association_list
-            a: opt!(do_parse!(ws >> token!(PComma) >> wss >> s: splatting_argument >> (s)))
-            b: opt!(do_parse!(ws >> token!(PComma) >> wss >> b: block_argument >> (b))) =>
-            (Arguments {
-                mandatory: Vec::with_capacity(0),
-                optional: o,
-                array: a.map(Box::new),
-                proc: b.map(Box::new),
-            }),
-    } */
     block_argument: Expression = {
         token!(OBitAnd) wss e: operator_expression => (e)
     }
@@ -1640,11 +1005,6 @@ sapphire_parser_gen::parser! {
     }
     // Ruby 1.9: laxer block parameters
     block_parameter_list: Parameters = { parameter_list }
-    /* ISO
-    block_parameter_list: MultiLeftHandSide = {
-        multiple_left_hand_side,
-        l: left_hand_side => (vec![MultiLHSItem::LHS(l)]),
-    }*/
     block_body: StatementList = { compound_statement }
 
     // Ruby 1.9: lambdas
@@ -2443,10 +1803,8 @@ sapphire_parser_gen::parser! {
     // 12.7 The rescue modifier statement
     rescue_modifier_statement: Statement = {
         s: main_statement_of_rescue_modifier_statement ws token!(Krescue)
-            f: fallback_statement_of_rescue_modifier_statement => (Statement::RescueMod {
-            main: Box::new(s),
-            fallback: Box::new(f),
-        })
+            f: fallback_statement_of_rescue_modifier_statement =>
+        (Statement::RescueMod(Box::new(s), Box::new(f)))
     }
     main_statement_of_rescue_modifier_statement: Statement = { statement }
     fallback_statement_of_rescue_modifier_statement: Statement = {
@@ -2565,77 +1923,6 @@ sapphire_parser_gen::parser! {
             Parameter::Splat(i.map(|t| t.clone().into()))
         },
     }
-    /* ISO
-    parameter_list: Parameters = {
-        m: mandatory_parameter_list
-            o: opt!(do_parse!(wss >> token!(PComma) >> o: optional_parameter_list >> (o)))
-            a: opt!(do_parse!(wss >> token!(PComma) >> a: array_parameter >> (a)))
-            p: opt!(do_parse!(wss >> token!(PComma) >> p: proc_parameter >> (p))) =>
-            (Parameters {
-                mandatory: m,
-                optional: o.unwrap_or_else(|| Vec::with_capacity(0)),
-                array: a,
-                proc: p,
-            }),
-        o: optional_parameter_list
-            a: opt!(do_parse!(wss >> token!(PComma) >> a: array_parameter >> (a)))
-            p: opt!(do_parse!(wss >> token!(PComma) >> p: proc_parameter >> (p))) =>
-            (Parameters {
-                mandatory: Vec::with_capacity(0),
-                optional: o,
-                array: a,
-                proc: p,
-            }),
-        a: array_parameter
-            p: opt!(do_parse!(wss >> token!(PComma) >> p: proc_parameter >> (p))) =>
-            (Parameters {
-                mandatory: Vec::with_capacity(0),
-                optional: Vec::with_capacity(0),
-                array: Some(a),
-                proc: p,
-            }),
-        p: proc_parameter =>
-            (Parameters {
-                mandatory: Vec::with_capacity(0),
-                optional: Vec::with_capacity(0),
-                array: None,
-                proc: Some(p),
-            }),
-    }
-    mandatory_parameter_list: (Vec<Ident>) = {
-        a: mandatory_parameter b: many0!(do_parse!(
-            wss >> token!(PComma) >> wss >> p: mandatory_parameter >> (p)
-        )) => (iter::once(a).chain(b.into_iter()).collect())
-    }
-    mandatory_parameter: Ident = {
-        i: token!(ILocal) => (i.clone().into())
-    }
-    optional_parameter_list: (Vec<(Ident, Expression)>) = {
-        a: optional_parameter b: many0!(do_parse!(
-            wss >> token!(PComma) >> wss >> p: optional_parameter >> (p)
-        )) => (iter::once(a).chain(b.into_iter()).collect())
-    }
-    optional_parameter: (Ident, Expression) = {
-        n: optional_parameter_name wss token!(OAssign) wss e: default_parameter_expression =>
-            ((n, e))
-    }
-    optional_parameter_name: Ident = {
-        i: token!(ILocal) => (i.clone().into())
-    }
-    default_parameter_expression: Expression = { operator_expression }
-    array_parameter: (Option<Ident>) = {
-        token!(OMul) i: opt!(do_parse!(wss >> i: array_parameter_name >> (i))) => (i)
-    }
-    array_parameter_name: Ident = {
-        i: token!(ILocal) => (i.clone().into())
-    }
-    proc_parameter: Ident = {
-        token!(OBitAnd) wss n: proc_parameter_name => (n)
-    }
-    proc_parameter_name: Ident = {
-        i: token!(ILocal) => (i.clone().into())
-    }
-    */
 
     // 13.3.6 The alias statement
     alias_statement: Statement = {
@@ -2687,137 +1974,4 @@ sapphire_parser_gen::parser! {
         token!(PLParen) wss e: expression wss token!(PRParen) => (e),
         variable_reference,
     }
-}
-
-#[test]
-fn parser() {
-    use crate::lex::*;
-
-    macro_rules! lex_parse {
-        ($input:expr) => {{
-            match parse(&Lexer::new($input).collect::<Vec<_>>()) {
-                Ok(parsed) => parsed,
-                Err(err) => panic!(
-                    "parse error:\n{}\n--\n{}",
-                    $input,
-                    err.fmt_with_src($input, true)
-                ),
-            }
-        }};
-    }
-
-    assert_eq!(
-        lex_parse!("::Kernel.p 1, ('a ' + 'cat') => 2, a: 'a', &horse"),
-        vec![Statement::Expr(Expression::Call {
-            member: Some(Box::new(Expression::RootConst(Ident::Const(
-                "Kernel".into()
-            )))),
-            name: Ident::Local("p".into()),
-            args: Arguments {
-                items: vec![Argument::Expr(Expression::Literal(Literal::Number {
-                    positive: true,
-                    value: NumericValue::Decimal("1".into()),
-                }))],
-                hash: vec![
-                    (
-                        Expression::BinOp(
-                            Box::new(Expression::Literal(Literal::String("a ".into()))),
-                            BinaryOp::Add,
-                            Box::new(Expression::Literal(Literal::String("cat".into())))
-                        ),
-                        Expression::Literal(Literal::Number {
-                            positive: true,
-                            value: NumericValue::Decimal("2".into()),
-                        })
-                    ),
-                    (
-                        Expression::Variable(Ident::Local("a".into())),
-                        Expression::Literal(Literal::String("a".into())),
-                    )
-                ],
-                block: Some(Box::new(Expression::Variable(Ident::Local("horse".into())))),
-            },
-        })]
-    );
-
-    assert_eq!(
-        lex_parse!("def a b,\nc\nend"),
-        vec![Statement::Expr(Expression::Method {
-            name: Ident::Local("a".into()),
-            params: vec![
-                Parameter::Mandatory(Ident::Local("b".into())),
-                Parameter::Mandatory(Ident::Local("c".into())),
-            ],
-            body: BodyStatement {
-                body: Vec::new(),
-                rescue: Vec::new(),
-                else_: None,
-                ensure: None,
-            },
-        })]
-    );
-
-    assert_eq!(
-        lex_parse!("puts 'a' if true if false while true ? self : nil"),
-        vec![Statement::WhileMod(
-            Box::new(Statement::IfMod(
-                Box::new(Statement::IfMod(
-                    Box::new(Statement::Expr(Expression::Call {
-                        member: None,
-                        name: Ident::Local("puts".into()),
-                        args: Arguments {
-                            items: vec![Argument::Expr(Expression::Literal(Literal::String(
-                                "a".into()
-                            )))],
-                            hash: Vec::new(),
-                            block: None,
-                        }
-                    })),
-                    Expression::True
-                )),
-                Expression::False
-            )),
-            Expression::Ternary {
-                cond: Box::new(Expression::True),
-                then: Box::new(Expression::SelfExpr),
-                else_: Box::new(Expression::Nil),
-            }
-        )]
-    );
-
-    assert_eq!(
-        lex_parse!("a ? b : c ? d : e"),
-        vec![Statement::Expr(Expression::Ternary {
-            cond: Box::new(Expression::Variable(Ident::Local("a".into()))),
-            then: Box::new(Expression::Variable(Ident::Local("b".into()))),
-            else_: Box::new(Expression::Ternary {
-                cond: Box::new(Expression::Variable(Ident::Local("c".into()))),
-                then: Box::new(Expression::Variable(Ident::Local("d".into()))),
-                else_: Box::new(Expression::Variable(Ident::Local("e".into()))),
-            })
-        })]
-    );
-
-    assert_eq!(
-        lex_parse!("a b c"),
-        vec![Statement::Expr(Expression::Call {
-            member: None,
-            name: Ident::Local("a".into()),
-            args: Arguments {
-                items: vec![Argument::Expr(Expression::Call {
-                    member: None,
-                    name: Ident::Local("b".into()),
-                    args: Arguments {
-                        items: vec![Argument::Expr(Expression::Variable(Ident::Local(
-                            "c".into()
-                        )))],
-                        hash: Vec::new(),
-                        block: None,
-                    }
-                })],
-                hash: Vec::new(),
-                block: None,
-            }
-        })]
-    );
 }

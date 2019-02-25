@@ -72,6 +72,7 @@ impl<'input> From<Token<'input>> for Ident {
     }
 }
 
+/// Assignment operations, such as `&&=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssignmentOp {
     And,
@@ -113,6 +114,7 @@ impl<'input> From<Token<'input>> for AssignmentOp {
     }
 }
 
+/// Binary operations, such as `==`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOp {
     Neq,
@@ -204,10 +206,7 @@ pub enum Statement {
     /// `.0 until .1`
     UntilMod(Box<Statement>, Expression),
     /// `.0 rescue .1`
-    RescueMod {
-        main: Box<Statement>,
-        fallback: Box<Statement>,
-    },
+    RescueMod(Box<Statement>, Box<Statement>),
     /// `.0 = .1`
     AssignVar(Ident, Expression),
     /// `member::name = value`
@@ -274,6 +273,7 @@ pub enum DefPath {
     Current(Ident),
 }
 
+/// The value of a numeric literal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NumericValue {
     Decimal(String),
@@ -310,13 +310,17 @@ impl<'input> From<UnsignedNumeric<'input>> for NumericValue {
     }
 }
 
+/// A fragment of a quoted literal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum QuotedFragment {
     String(String),
+    /// `#$ident`, `#@@ident`, or `#@ident`
     Ident(Ident),
+    /// `#{ compound_statement }`
     Interpolated(StatementList),
 }
 
+/// A literal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Literal {
     Number { positive: bool, value: NumericValue },
@@ -494,8 +498,10 @@ pub enum LeftHandSide {
     RootConst(Ident),
 }
 
+/// Left hand side in a multiple assignment statement.
 pub type MultiLeftHandSide = Vec<MultiLHSItem>;
 
+/// A left hand side item in a multiple assignment statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MultiLHSItem {
     LHS(LeftHandSide),
@@ -505,12 +511,14 @@ pub enum MultiLHSItem {
     Group(MultiLeftHandSide),
 }
 
+/// Right hand side in a multiple assignment statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MultiRightHandSide {
     pub items: Vec<Expression>,
     pub splat: Option<Expression>,
 }
 
+/// A block or lambda.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Block {
     pub params: Parameters,
@@ -518,25 +526,7 @@ pub struct Block {
     pub lambda: bool,
 }
 
-/*
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub struct Arguments<'input> {
-    pub mandatory: Vec<Expression<'input>>,
-    pub optional: Vec<(Expression<'input>, Expression<'input>)>,
-    pub array: Option<Box<Expression<'input>>>,
-    pub proc: Option<Box<Expression<'input>>>,
-}
-
-impl<'input> Arguments<'input> {
-    pub fn is_empty(&self) -> bool {
-        self.mandatory.is_empty()
-            && self.optional.is_empty()
-            && self.array.is_none()
-            && self.proc.is_none()
-    }
-}
-*/
-
+/// Method or indexing arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Arguments {
     pub items: Vec<Argument>,
@@ -545,29 +535,24 @@ pub struct Arguments {
 }
 
 impl Arguments {
+    /// True if there are no arguments.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.hash.is_empty() && self.block.is_none()
     }
 }
 
+/// A positional argument.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Argument {
     Expr(Expression),
     Splat(Expression),
 }
 
-/*
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub struct Parameters<'input> {
-    pub mandatory: Vec<Ident<'input>>,
-    pub optional: Vec<(Ident<'input>, Expression<'input>)>,
-    pub array: Option<Option<Ident<'input>>>,
-    pub proc: Option<Ident<'input>>,
-}
-*/
-
+// TODO: enforce order; these do actually have one
+/// A list of method parameters.
 pub type Parameters = Vec<Parameter>;
 
+/// Method parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Parameter {
     Mandatory(Ident),

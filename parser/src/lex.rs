@@ -2,7 +2,10 @@
 
 use nom::*;
 
+/// The Spanned format (originally from lalrpop)
 pub type Spanned<T, L, E> = Result<(L, T, L), E>;
+
+/// An item produced by the lexer.
 pub type Item<'input> = Spanned<Token<'input>, usize, Err<&'input str>>;
 
 // nom parser overrides, modified so they don’t fail weirdly at EOF
@@ -337,6 +340,7 @@ pub struct NumericLiteral<'input> {
     pub contents: UnsignedNumeric<'input>,
 }
 
+/// The value of a numeric literal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UnsignedNumeric<'input> {
     OctInt(&'input str),
@@ -695,6 +699,7 @@ named!(lex_one<&str, Token>, alt_complete!(
     lex_whitespace | keyword | literal | punctuator | operator | identifier
 ));
 
+/// Iterator over tokens in the input string.
 pub struct Lexer<'input> {
     remaining: &'input str,
     prev_token_pos: usize,
@@ -703,6 +708,7 @@ pub struct Lexer<'input> {
 }
 
 impl<'input> Lexer<'input> {
+    /// Creates a new lexer with the given input string.
     pub fn new(input: &str) -> Lexer {
         Lexer {
             remaining: input,
@@ -712,6 +718,10 @@ impl<'input> Lexer<'input> {
         }
     }
 
+    /// Updates the remaining string, taking care of `at_sol`.
+    ///
+    /// # Panics
+    /// - if not `remaining.len() < self.remaining.len()`
     fn update_remaining(&mut self, remaining: &'input str) {
         let split_pos = self.remaining.len() - remaining.len();
         self.at_sol = self.remaining.is_char_boundary(split_pos - 1)
