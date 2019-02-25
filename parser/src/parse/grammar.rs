@@ -779,14 +779,15 @@ sapphire_parser_gen::parser! {
             (i)
     }
     method_invocation_without_parentheses: Expression = {
+        // TODO: check if the following rule works
         e: chained_command_with_do_block wss token!(PDot, PDblColon,) wss i: method_name ws
             a: argument_without_parentheses => (Expression::Call {
             member: Some(Box::new(e)),
             name: i,
             args: a,
         }),
-        command,
         chained_command_with_do_block,
+        command,
         return_with_argument,
         break_with_argument,
         next_with_argument,
@@ -834,14 +835,18 @@ sapphire_parser_gen::parser! {
         yield_with_argument,
     }
     chained_command_with_do_block: Expression = {
-        c: command_with_do_block wss i: many0!(chained_method_invocation) => {
+        c: command_with_do_block i: opt!(do_parse!(
+            wss >> i: many1!(chained_method_invocation, err: Unexpected(Expected::Command)) >> (i)
+        )) => {
             let mut expr = c;
-            for (name, args) in i {
-                expr = Expression::Call {
-                    member: Some(Box::new(expr)),
-                    name,
-                    args,
-                };
+            if let Some(i) = i {
+                for (name, args) in i {
+                    expr = Expression::Call {
+                        member: Some(Box::new(expr)),
+                        name,
+                        args,
+                    };
+                }
             }
             expr
         },
@@ -852,8 +857,10 @@ sapphire_parser_gen::parser! {
     }
     command_with_do_block: Expression = {
         super_with_argument_and_do_block,
-        i: method_identifier ws a: argument_without_parentheses wss b: do_block => {
-            let mut args = a;
+        // frankly I’m not sure why argument_without_parentheses is marked as required in the
+        // ISO standard but it shouldn’t be; otherwise `method do; end` wouldn’t be valid syntax
+        i: method_identifier ws a: opt!(argument_without_parentheses) wss b: do_block => {
+            let mut args = a.unwrap_or_else(|| Arguments::default());
             args.block = Some(Box::new(Expression::Block(b)));
             Expression::Call {
                 member: None,
@@ -861,6 +868,7 @@ sapphire_parser_gen::parser! {
                 args,
             }
         },
+        /* This rule also won’t work (see above in command)
         e: primary_expression ws token!(PDot, PDblColon,) i: method_name ws
             a: argument_without_parentheses wss b: do_block => {
             let mut args = a;
@@ -870,7 +878,32 @@ sapphire_parser_gen::parser! {
                 name: i,
                 args,
             }
-        },
+        }, */
+        e: primary_expression ws a: opt!(argument_without_parentheses) wss b: do_block => [ i => {
+            let call = match e {
+                Expression::Call {
+                    member,
+                    name,
+                    args,
+                } => if args.is_empty() {
+                    Some((member, name))
+                } else {
+                    None
+                },
+                _ => None,
+            };
+            if let Some((member, name)) = call {
+                let mut args = a.unwrap_or_else(|| Arguments::default());
+                args.block = Some(Box::new(Expression::Block(b)));
+                Ok((i, Expression::Call {
+                    member,
+                    name,
+                    args,
+                }))
+            } else {
+                Err(ParseError::Unexpected(i.without_state(), Expected::Command))
+            }
+        }],
     }
 
     // 11.3.2 Method arguments

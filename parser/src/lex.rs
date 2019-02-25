@@ -95,10 +95,10 @@ named!(l_multi_line_comment<&str, ()>, do_parse!(
     tag!("=begin") >>
     // rest of begin line
     alt_complete!(
-        line_terminator | do_parse!(ws >> rest_of_line >> ())
+        line_terminator | do_parse!(ws >> rest_of_line >> line_terminator >> ())
     ) >>
     // comment body and end line
-    many_till!(rest_of_line, tag!("=end")) >>
+    many_till!(do_parse!(rest_of_line >> line_terminator >> ()), tag!("=end")) >>
     ()
 ));
 

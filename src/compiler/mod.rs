@@ -4,7 +4,8 @@ use std::fmt;
 
 /// An owned version of [`ParseError`].
 ///
-/// Display-formatting this is equivalent to using [`ParseError::fmt_with_src`].
+/// Display-formatting this is equivalent to using [`ParseError::fmt_with_src`] (without ANSI
+/// colors).
 #[derive(Debug)]
 pub struct OwnedParseError {
     // these two fields are for all intents and purposes immutable
@@ -21,11 +22,15 @@ impl OwnedParseError {
     pub fn error(&self) -> &ParseError<'static> {
         &self.error
     }
+
+    pub fn fmt_ansi(&self) -> String {
+        self.error.fmt_with_src(&self.input, true)
+    }
 }
 
 impl fmt::Display for OwnedParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.error.fmt_with_src(&self.input))
+        write!(f, "{}", self.error.fmt_with_src(&self.input, false))
     }
 }
 
