@@ -1,6 +1,7 @@
 //! Abstract syntax tree nodes.
 
 use crate::lex::{Token, UnsignedNumeric};
+use std::fmt;
 
 /// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -72,6 +73,21 @@ impl<'input> From<Token<'input>> for Ident {
     }
 }
 
+impl fmt::Display for Ident {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Ident::Local(s)
+            | Ident::Const(s)
+            | Ident::MethodOnly(s)
+            | Ident::AssignmentMethod(s) => write!(f, "{}", s),
+            Ident::Global(s) => write!(f, "${}", s),
+            Ident::Class(s) => write!(f, "@@{}", s),
+            Ident::Instance(s) => write!(f, "@{}", s),
+            Ident::Keyword(s) => write!(f, "{}", s),
+        }
+    }
+}
+
 /// Assignment operations, such as `&&=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssignmentOp {
@@ -114,6 +130,26 @@ impl<'input> From<Token<'input>> for AssignmentOp {
     }
 }
 
+impl Into<&'static str> for AssignmentOp {
+    fn into(self) -> &'static str {
+        match self {
+            AssignmentOp::And => "&&=",
+            AssignmentOp::Or => "||=",
+            AssignmentOp::BitAnd => "&=",
+            AssignmentOp::BitOr => "|=",
+            AssignmentOp::BitXor => "^=",
+            AssignmentOp::Shl => "<<=",
+            AssignmentOp::Shr => ">>=",
+            AssignmentOp::Add => "+=",
+            AssignmentOp::Sub => "-=",
+            AssignmentOp::Mul => "*=",
+            AssignmentOp::Div => "/=",
+            AssignmentOp::Rem => "%=",
+            AssignmentOp::Pow => "**=",
+        }
+    }
+}
+
 /// Binary operations, such as `==`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOp {
@@ -140,7 +176,6 @@ pub enum BinaryOp {
     Mul,
     Div,
     Rem,
-    BitInv,
 }
 
 impl<'input> From<Token<'input>> for BinaryOp {
@@ -169,7 +204,6 @@ impl<'input> From<Token<'input>> for BinaryOp {
             Token::OMul => BinaryOp::Mul,
             Token::ODiv => BinaryOp::Div,
             Token::ORem => BinaryOp::Rem,
-            Token::OBitInv => BinaryOp::BitInv,
             token => panic!(
                 "don’t know how to turn {:?} into a binary operation",
                 token
@@ -336,7 +370,7 @@ pub enum Expression {
     /// `::.0`
     RootConst(Ident),
     /// `.0..1` or `.0::.1`
-    Member(Box<Expression>, Ident),
+    SubConst(Box<Expression>, Ident),
     Literal(Literal),
     Block(Block),
     Nil,
@@ -359,7 +393,6 @@ pub enum Expression {
     UPlus(Box<Expression>),
     /// `~.0`
     BitInv(Box<Expression>),
-    VarOrMethod(Ident),
     /// `.0 .1 .2`
     BinOp(Box<Expression>, BinaryOp, Box<Expression>),
     /// `if cond; then; elsif; else end`

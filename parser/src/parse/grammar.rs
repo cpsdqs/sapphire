@@ -699,7 +699,11 @@ sapphire_parser_gen::parser! {
     primary_method_invocation: Expression = {
         super_with_optional_argument,
         indexing_method_invocation,
-        t: token!(IMethodOnly) => (Expression::VarOrMethod(t.clone().into())),
+        t: token!(IMethodOnly) => (Expression::Call {
+            member: None,
+            name: t.clone().into(),
+            args: Arguments::default(),
+        }),
         i: method_identifier wss b: block => (Expression::Call {
             member: None,
             name: i,
@@ -1715,7 +1719,7 @@ sapphire_parser_gen::parser! {
     scoped_constant_reference: Expression = {
         token!(PDblColon) wss i: token!(IConstant) => (Expression::RootConst(i.clone().into())),
         e: primary_expression token!(PDblColon) wss i: token!(IConstant) =>
-            (Expression::Member(Box::new(e), i.clone().into())),
+            (Expression::SubConst(Box::new(e), i.clone().into())),
     }
 
     // 11.5.4.8 Pseudo variables

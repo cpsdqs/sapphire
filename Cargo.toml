@@ -6,5 +6,6 @@ edition = "2018"
 
 [dependencies]
 sapphire-parser = { path = "parser" }
+fnv = "1.0"
 
 [workspace]

@@ -2,6 +2,8 @@ use sapphire_parser::lex::{Item, Lexer};
 use sapphire_parser::parse::{parse, ParseError};
 use std::fmt;
 
+mod ir;
+
 /// An owned version of [`ParseError`].
 ///
 /// Display-formatting this is equivalent to using [`ParseError::fmt_with_src`] (without ANSI
@@ -58,5 +60,11 @@ pub fn compile(input: String) -> Result<(), OwnedParseError> {
         }
     };
 
-    unimplemented!("compile {:?}", ast)
+    let mut symbols = crate::symbol::Symbols::new();
+    let proc = ir::Proc::new(&ast, &mut symbols);
+    unimplemented!(
+        "further compililation of:\n{}\n---\n{}\n",
+        input,
+        proc.unwrap().fmt_with_symbols(&symbols)
+    )
 }
