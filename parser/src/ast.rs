@@ -130,26 +130,6 @@ impl<'input> From<Token<'input>> for AssignmentOp {
     }
 }
 
-impl Into<&'static str> for AssignmentOp {
-    fn into(self) -> &'static str {
-        match self {
-            AssignmentOp::And => "&&=",
-            AssignmentOp::Or => "||=",
-            AssignmentOp::BitAnd => "&=",
-            AssignmentOp::BitOr => "|=",
-            AssignmentOp::BitXor => "^=",
-            AssignmentOp::Shl => "<<=",
-            AssignmentOp::Shr => ">>=",
-            AssignmentOp::Add => "+=",
-            AssignmentOp::Sub => "-=",
-            AssignmentOp::Mul => "*=",
-            AssignmentOp::Div => "/=",
-            AssignmentOp::Rem => "%=",
-            AssignmentOp::Pow => "**=",
-        }
-    }
-}
-
 /// Binary operations, such as `==`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOp {

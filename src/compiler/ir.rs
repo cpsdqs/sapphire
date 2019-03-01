@@ -60,6 +60,14 @@ impl<'a> Scope<'a> {
         }
     }
 
+    fn symbols(&mut self) -> &mut Symbols {
+        if let Some(symbols) = &mut self.symbols {
+            symbols
+        } else {
+            self.parent.as_mut().unwrap().symbols()
+        }
+    }
+
     fn next_var(&mut self) -> Var {
         self.var_counter += 1;
         Var(self.var_counter)
@@ -101,6 +109,9 @@ impl<'a> Scope<'a> {
 pub enum IRError {
     InvalidConstPath(Ident),
     InvalidMethodName(Ident),
+    InvalidModuleName(Ident),
+    InvalidDefined,
+    TooManySplats,
 }
 
 #[derive(Debug)]
@@ -125,6 +136,8 @@ enum IROp {
     AppendString(Var, Var),
     /// Loads a literal symbol into the local variable.
     LoadSymbol(Var, Symbol),
+    /// Loads an i64 number into the local variable.
+    LoadI64(Var, i64),
     /// Loads a proc into the local variable.
     LoadProc(Var, Proc),
     /// Pushes a positional argument.
@@ -137,6 +150,8 @@ enum IROp {
     ArgBlock(Var),
     /// Calls a method and loads the result into a local variable.
     Call(Var, Option<Var>, Symbol),
+    /// Calls super and loads the result into a local variable.
+    Super(Var),
     /// Performs the not operation on the second argument and loads it into the first argument.
     Not(Var, Var),
     /// Label marker.
@@ -151,6 +166,41 @@ enum IROp {
     Return(Var),
     /// Assigns the value of the second to the first.
     Assign(Var, Var),
+    /// Start of a rescuable section.
+    BeginRescue(Label),
+    /// Jumps to the label if the current exception matches.
+    RescueMatch(Var, Label),
+    /// Binds the exception to a variable.
+    RescueBind(Var),
+    /// End of a rescuable section.
+    EndRescue,
+    /// `defined?` for a local variable.
+    DefinedLocal(Var, Symbol),
+    /// `defined?` for a constant variable.
+    DefinedConst(Var, Symbol),
+    /// `defined?` for a global variable.
+    DefinedGlobal(Var, Symbol),
+    /// `defined?` for a class variable.
+    DefinedClassVar(Var, Symbol),
+    /// `defined?` for an instance variable.
+    DefinedIVar(Var, Symbol),
+    /// `break`
+    Break,
+    /// `yield`
+    Yield,
+    /// `next`
+    Next,
+    /// `redo`
+    Redo,
+    /// `retry`
+    Retry,
+    /// Defines a module.
+    DefModule(Option<Var>, Symbol, Proc),
+    /// Defines a class.
+    DefClass(Option<Var>, Symbol, Option<Var>, Proc),
+    /// Defines a method.
+    // TODO: params?
+    DefMethod(Symbol, Proc),
 }
 
 impl IROp {
@@ -177,6 +227,7 @@ impl IROp {
             IROp::LoadString(var, string) => format!("{} = {:?};", var, string),
             IROp::AppendString(var, other) => format!("{} += {}.to_s;", var, other),
             IROp::LoadSymbol(var, symbol) => format!("{} = :{};", var, sym!(symbol)),
+            IROp::LoadI64(var, value) => format!("{} = {};", var, value),
             IROp::LoadProc(var, proc) => format!("{} = {};", var, proc.fmt_with_symbols(symbols)),
             IROp::Arg(var) => format!("push_arg {};", var),
             IROp::ArgAssoc(key, val) => format!("push_arg {} => {};", key, val),
@@ -186,6 +237,7 @@ impl IROp {
                 Some(recv) => format!("{} = {}.{}();", out, recv, sym!(name)),
                 None => format!("{} = {}();", out, sym!(name)),
             },
+            IROp::Super(out) => format!("{} = super();", out),
             IROp::Not(out, var) => format!("{} = not {};", out, var),
             IROp::Label(label) => format!("{}", label),
             IROp::Jump(label) => format!("jump -> {};", label),
@@ -193,6 +245,56 @@ impl IROp {
             IROp::JumpIfNot(cond, label) => format!("if not {} jump -> {};", cond, label),
             IROp::Return(var) => format!("return {};", var),
             IROp::Assign(lhs, rhs) => format!("{} = {};", lhs, rhs),
+            IROp::BeginRescue(label) => format!("begin rescue (rescue -> {})", label),
+            IROp::RescueMatch(class, label) => format!("rescue instanceof {} -> {}", class, label),
+            IROp::RescueBind(var) => format!("rescue => {};", var),
+            IROp::EndRescue => format!("end rescue"),
+            IROp::DefinedLocal(var, name) => format!("{} = defined? {};", var, sym!(name)),
+            IROp::DefinedConst(var, name) => format!("{} = defined? {};", var, sym!(name)),
+            IROp::DefinedGlobal(var, name) => format!("{} = defined? ${};", var, sym!(name)),
+            IROp::DefinedClassVar(var, name) => format!("{} = defined? @@{};", var, sym!(name)),
+            IROp::DefinedIVar(var, name) => format!("{} = defined? ${};", var, sym!(name)),
+            IROp::Break => format!("break();"),
+            IROp::Yield => format!("yield();"),
+            IROp::Next => format!("next();"),
+            IROp::Redo => format!("redo;"),
+            IROp::Retry => format!("retry;"),
+            IROp::DefModule(parent, name, proc) => match parent {
+                Some(parent) => format!(
+                    "module {}::{}: {}",
+                    parent,
+                    sym!(name),
+                    proc.fmt_with_symbols(symbols)
+                ),
+                None => format!("module {}: {}", sym!(name), proc.fmt_with_symbols(symbols)),
+            },
+            IROp::DefClass(parent, name, superclass, proc) => match (parent, superclass) {
+                (Some(parent), Some(superclass)) => format!(
+                    "class {}::{} < {}: {}",
+                    parent,
+                    sym!(name),
+                    superclass,
+                    proc.fmt_with_symbols(symbols)
+                ),
+                (Some(parent), None) => format!(
+                    "class {}::{}: {}",
+                    parent,
+                    sym!(name),
+                    proc.fmt_with_symbols(symbols)
+                ),
+                (None, Some(superclass)) => format!(
+                    "class {} < {}: {}",
+                    sym!(name),
+                    superclass,
+                    proc.fmt_with_symbols(symbols)
+                ),
+                (None, None) => {
+                    format!("module {}: {}", sym!(name), proc.fmt_with_symbols(symbols))
+                }
+            },
+            IROp::DefMethod(name, proc) => {
+                format!("def {}: {}", sym!(name), proc.fmt_with_symbols(symbols))
+            }
         }
     }
 }
@@ -222,6 +324,29 @@ impl Proc {
 
         let out = scope.next_var();
         Self::expand_statements(statements, out, &mut scope, &mut items)?;
+        items.push(IROp::Return(out));
+
+        Ok(Proc {
+            variables,
+            may_be_captured,
+            items,
+        })
+    }
+
+    fn new_with_body(body: &BodyStatement, symbols: &mut Symbols) -> Result<Proc, IRError> {
+        let mut variables = FnvHashMap::default();
+        let mut items = Vec::new();
+        let mut may_be_captured = false;
+
+        let mut scope = Scope {
+            parent: None,
+            variables: &mut variables,
+            symbols: Some(symbols),
+            may_be_captured: &mut may_be_captured,
+            var_counter: 0,
+        };
+
+        let out = Self::expand_body_statement(body, &mut scope, &mut items)?;
         items.push(IROp::Return(out));
 
         Ok(Proc {
@@ -357,9 +482,15 @@ impl Proc {
                 let out = scope.next_var();
                 match literal {
                     Literal::Number {
-                        positive: _,
-                        value: _,
-                    } => unimplemented!("load number"),
+                        positive,
+                        value,
+                    } => {
+                        if let Some(number) = Self::number_to_i64(*positive, value) {
+                            items.push(IROp::LoadI64(out, number));
+                        } else {
+                            unimplemented!("load float or bignum")
+                        }
+                    }
                     Literal::String(string) => {
                         items.push(IROp::LoadString(out, string.clone()));
                     }
@@ -634,6 +765,7 @@ impl Proc {
                 items.push(IROp::JumpIfNot(cond, end_label));
                 let out = scope.next_var();
                 Self::expand_statements(body, out, scope, items)?;
+                items.push(IROp::Jump(top_label));
                 items.push(IROp::Label(end_label));
                 let out = scope.next_var();
                 Ok(out)
@@ -646,12 +778,107 @@ impl Proc {
                 items.push(IROp::JumpIf(cond, end_label));
                 let out = scope.next_var();
                 Self::expand_statements(body, out, scope, items)?;
+                items.push(IROp::Jump(top_label));
                 items.push(IROp::Label(end_label));
                 let out = scope.next_var();
                 Ok(out)
             }
-            Expression::For(_lhs, _expr, _body) => unimplemented!("for expression"),
-            Expression::Begin(_body) => unimplemented!("begin expression"),
+            Expression::For(lhs, expr, body) => {
+                let simple_for = match &**expr {
+                    Expression::Range {
+                        start,
+                        end,
+                        inclusive,
+                    } => match (start.as_ref().map(|b| &**b), end.as_ref().map(|b| &**b)) {
+                        (
+                            Some(Expression::Literal(Literal::Number {
+                                positive: start_positive,
+                                value: start_value,
+                            })),
+                            Some(Expression::Literal(Literal::Number {
+                                positive: end_positive,
+                                value: end_value,
+                            })),
+                        ) => {
+                            let start = Self::number_to_i64(*start_positive, start_value);
+                            let end = Self::number_to_i64(*end_positive, end_value);
+
+                            if let (Some(start), Some(end)) = (start, end) {
+                                if lhs.len() == 1 {
+                                    match &lhs[0] {
+                                        MultiLHSItem::LHS(LeftHandSide::Var(Ident::Local(
+                                            name,
+                                        ))) => Some((name, start, end, inclusive)),
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+
+                if let Some((name, start, end, inclusive)) = simple_for {
+                    let name = scope.symbol(name);
+                    let counter = scope.define_local_var(name);
+                    items.push(IROp::LoadI64(counter, start));
+                    if start < end || (start == end && *inclusive) {
+                        let top_label = scope.next_label();
+                        let end_label = scope.next_label();
+                        let end_var = scope.next_var();
+                        let loop_cond = scope.next_var();
+                        let out = scope.next_var();
+                        let one = scope.next_var();
+                        items.push(IROp::LoadI64(end_var, end));
+                        items.push(IROp::LoadI64(one, 1));
+                        items.push(IROp::Label(top_label));
+                        items.push(IROp::Arg(end_var));
+                        items.push(IROp::Call(
+                            loop_cond,
+                            Some(counter),
+                            if *inclusive {
+                                scope.symbol("<=")
+                            } else {
+                                scope.symbol("<")
+                            },
+                        ));
+                        items.push(IROp::JumpIfNot(loop_cond, end_label));
+                        Self::expand_statements(body, out, scope, items)?;
+                        items.push(IROp::Arg(one));
+                        items.push(IROp::Call(out, Some(counter), scope.symbol("+=")));
+                        items.push(IROp::Jump(top_label));
+                        items.push(IROp::Label(end_label));
+                    }
+                    Ok(scope.next_var())
+                } else {
+                    let mut block_items = Vec::new();
+
+                    // TODO: assign block params
+
+                    let out = scope.next_var();
+                    Self::expand_statements(body, out, scope, &mut block_items)?;
+
+                    let block = Proc {
+                        items: block_items,
+                        may_be_captured: false,
+                        variables: FnvHashMap::default(),
+                    };
+
+                    let expr = Self::expand_expr(expr, scope, items)?;
+                    let block_var = scope.next_var();
+                    items.push(IROp::LoadProc(block_var, block));
+                    items.push(IROp::ArgBlock(block_var));
+                    items.push(IROp::Call(expr, Some(expr), scope.symbol("each")));
+
+                    Ok(scope.next_var())
+                }
+            }
+            Expression::Begin(body) => Self::expand_body_statement(body, scope, items),
             Expression::Call { member, name, args } => {
                 if let Some(member) = member {
                     let out = Self::expand_expr(member, scope, items)?;
@@ -697,8 +924,284 @@ impl Proc {
                     Ok(out)
                 }
             }
+            Expression::Index(expr, args) => {
+                let expr = Self::expand_expr(expr, scope, items)?;
+                Self::expand_args(args, scope, items)?;
+                let out = scope.next_var();
+                items.push(IROp::Call(out, Some(expr), scope.symbol("[]")));
+                Ok(out)
+            }
+            Expression::Defined(expr) => match &**expr {
+                Expression::Variable(ident) => match ident {
+                    Ident::Local(name) => {
+                        let name = scope.symbol(name);
+                        let out = scope.next_var();
+                        items.push(IROp::DefinedLocal(out, name));
+                        Ok(out)
+                    }
+                    Ident::Const(name) => {
+                        let name = scope.symbol(name);
+                        let out = scope.next_var();
+                        items.push(IROp::DefinedConst(out, name));
+                        Ok(out)
+                    }
+                    Ident::Global(name) => {
+                        let name = scope.symbol(name);
+                        let out = scope.next_var();
+                        items.push(IROp::DefinedGlobal(out, name));
+                        Ok(out)
+                    }
+                    Ident::Class(name) => {
+                        let name = scope.symbol(name);
+                        let out = scope.next_var();
+                        items.push(IROp::DefinedClassVar(out, name));
+                        Ok(out)
+                    }
+                    Ident::Instance(name) => {
+                        let name = scope.symbol(name);
+                        let out = scope.next_var();
+                        items.push(IROp::DefinedIVar(out, name));
+                        Ok(out)
+                    }
+                    _ => Err(IRError::InvalidDefined),
+                },
+                _ => Err(IRError::InvalidDefined),
+            },
+            Expression::Super(args) => {
+                Self::expand_args(args, scope, items)?;
+                let out = scope.next_var();
+                items.push(IROp::Super(out));
+                Ok(out)
+            }
+            Expression::Return(args) => {
+                if let Some(_args) = args {
+                    unimplemented!("return with args")
+                } else {
+                    let nil = scope.next_var();
+                    items.push(IROp::Return(nil));
+                    Ok(nil)
+                }
+            }
+            Expression::Break(args) => {
+                if let Some(_args) = args {
+                    unimplemented!("break with args")
+                } else {
+                    items.push(IROp::Break);
+                    Ok(scope.next_var())
+                }
+            }
+            Expression::Yield(args) => {
+                if let Some(_args) = args {
+                    unimplemented!("yield with args")
+                } else {
+                    items.push(IROp::Yield);
+                    Ok(scope.next_var())
+                }
+            }
+            Expression::Next(args) => {
+                if let Some(_args) = args {
+                    unimplemented!("next with args")
+                } else {
+                    items.push(IROp::Next);
+                    Ok(scope.next_var())
+                }
+            }
+            Expression::Redo => {
+                items.push(IROp::Redo);
+                Ok(scope.next_var())
+            }
+            Expression::Retry => {
+                items.push(IROp::Retry);
+                Ok(scope.next_var())
+            }
+            Expression::Statements(statements) => {
+                let out = scope.next_var();
+                Self::expand_statements(statements, out, scope, items)?;
+                Ok(out)
+            }
+            Expression::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let start = if let Some(start) = start {
+                    Self::expand_expr(start, scope, items)?
+                } else {
+                    scope.next_var() // nil
+                };
+                let end = if let Some(end) = end {
+                    Self::expand_expr(end, scope, items)?
+                } else {
+                    scope.next_var() // nil
+                };
+                let incl = scope.next_var();
+                items.push(IROp::LoadBool(incl, *inclusive));
+
+                let out = scope.next_var();
+                items.push(IROp::LoadRoot(out));
+                items.push(IROp::LoadConst(out, Some(out), scope.symbol("Range")));
+                items.push(IROp::Arg(start));
+                items.push(IROp::Arg(end));
+                items.push(IROp::Arg(incl));
+                items.push(IROp::Call(out, Some(out), scope.symbol("new")));
+                Ok(out)
+            }
+            Expression::Module { path, body } => {
+                let body = Proc::new_with_body(body, scope.symbols())?;
+                match path {
+                    DefPath::Member(expr, name) => {
+                        let expr = Self::expand_expr(expr, scope, items)?;
+                        let name = scope.symbol(match name {
+                            Ident::Const(name) => name,
+                            name => return Err(IRError::InvalidModuleName(name.clone())),
+                        });
+                        items.push(IROp::DefModule(Some(expr), name, body));
+                    }
+                    DefPath::Root(name) => {
+                        let root = scope.next_var();
+                        items.push(IROp::LoadRoot(root));
+                        let name = scope.symbol(match name {
+                            Ident::Const(name) => name,
+                            name => return Err(IRError::InvalidModuleName(name.clone())),
+                        });
+                        items.push(IROp::DefModule(Some(root), name, body));
+                    }
+                    DefPath::Current(name) => {
+                        let name = scope.symbol(match name {
+                            Ident::Const(name) => name,
+                            name => return Err(IRError::InvalidModuleName(name.clone())),
+                        });
+                        items.push(IROp::DefModule(None, name, body));
+                    }
+                }
+                Ok(scope.next_var())
+            }
+            Expression::Class {
+                path,
+                superclass,
+                body,
+            } => {
+                let body = Proc::new_with_body(body, scope.symbols())?;
+                let superclass = if let Some(superclass) = superclass {
+                    Some(Self::expand_expr(superclass, scope, items)?)
+                } else {
+                    None
+                };
+                match path {
+                    DefPath::Member(expr, name) => {
+                        let expr = Self::expand_expr(expr, scope, items)?;
+                        let name = scope.symbol(match name {
+                            Ident::Const(name) => name,
+                            name => return Err(IRError::InvalidModuleName(name.clone())),
+                        });
+                        items.push(IROp::DefClass(Some(expr), name, superclass, body));
+                    }
+                    DefPath::Root(name) => {
+                        let root = scope.next_var();
+                        items.push(IROp::LoadRoot(root));
+                        let name = scope.symbol(match name {
+                            Ident::Const(name) => name,
+                            name => return Err(IRError::InvalidModuleName(name.clone())),
+                        });
+                        items.push(IROp::DefClass(Some(root), name, superclass, body));
+                    }
+                    DefPath::Current(name) => {
+                        let name = scope.symbol(match name {
+                            Ident::Const(name) => name,
+                            name => return Err(IRError::InvalidModuleName(name.clone())),
+                        });
+                        items.push(IROp::DefClass(None, name, superclass, body));
+                    }
+                }
+                Ok(scope.next_var())
+            }
+            Expression::Method { name, params, body } => {
+                let name = match name {
+                    Ident::Local(name)
+                    | Ident::Const(name)
+                    | Ident::MethodOnly(name)
+                    | Ident::AssignmentMethod(name) => scope.symbol(name),
+                    Ident::Keyword(name) => scope.symbol(name),
+                    name => return Err(IRError::InvalidMethodName(name.clone())),
+                };
+
+                let mut did_find_splat = false;
+                for param in params {
+                    match param {
+                        Parameter::Splat(..) => {
+                            if !did_find_splat {
+                                did_find_splat = true;
+                            } else {
+                                return Err(IRError::TooManySplats);
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+
+                // TODO: deal with params
+
+                let body = Proc::new_with_body(body, scope.symbols())?;
+                items.push(IROp::DefMethod(name, body));
+
+                Ok(scope.next_var())
+            }
             _ => unimplemented!("expr"),
         }
+    }
+
+    fn expand_body_statement(
+        body: &BodyStatement,
+        scope: &mut Scope,
+        items: &mut Vec<IROp>,
+    ) -> Result<Var, IRError> {
+        let rescue_label = scope.next_label();
+        let else_label = scope.next_label();
+        let ensure_label = scope.next_label();
+        items.push(IROp::BeginRescue(rescue_label));
+        let out = scope.next_var();
+        Self::expand_statements(&body.body, out, scope, items)?;
+        items.push(IROp::Jump(else_label));
+        items.push(IROp::EndRescue);
+        items.push(IROp::Label(rescue_label));
+        for rescue in &body.rescue {
+            let end_label = scope.next_label();
+            if let Some(classes) = &rescue.classes {
+                let begin_label = scope.next_label();
+                for item in &classes.items {
+                    let exception_class = Self::expand_expr(item, scope, items)?;
+                    items.push(IROp::RescueMatch(exception_class, begin_label));
+                }
+                items.push(IROp::Jump(end_label));
+                items.push(IROp::Label(begin_label));
+            }
+            let out = scope.next_var();
+            if let Some(binding) = &rescue.variable {
+                match binding {
+                    LeftHandSide::Var(ident) => match ident {
+                        Ident::Local(name) => {
+                            let name = scope.symbol(name);
+                            let var = scope.define_local_var(name);
+                            items.push(IROp::RescueBind(var));
+                        }
+                        _ => unimplemented!("assign exception to non-local identifier"),
+                    },
+                    _ => unimplemented!("assign exception to non-variable"),
+                }
+            }
+            Self::expand_statements(&rescue.body, out, scope, items)?;
+            items.push(IROp::Jump(ensure_label));
+            items.push(IROp::Label(end_label));
+        }
+        items.push(IROp::Label(else_label));
+        if let Some(else_) = &body.else_ {
+            Self::expand_statements(&else_, out, scope, items)?;
+        }
+        items.push(IROp::Label(ensure_label));
+        if let Some(ensure) = &body.ensure {
+            Self::expand_statements(&ensure, out, scope, items)?;
+        }
+        Ok(out)
     }
 
     fn expand_args(
@@ -787,6 +1290,122 @@ impl Proc {
                 items.push(IROp::Call(out, None, name));
                 Ok(out)
             }
+        }
+    }
+
+    fn number_to_i64(positive: bool, value: &NumericValue) -> Option<i64> {
+        macro_rules! checked {
+            ($e:expr) => {
+                match $e {
+                    Some(e) => e,
+                    None => return None,
+                }
+            };
+        }
+
+        let sign = if positive { 1 } else { -1 };
+
+        match value {
+            NumericValue::Binary(value) => {
+                if value.len() > 63 {
+                    return None;
+                }
+
+                let mut n: i64 = 0;
+                for c in value.chars() {
+                    n = checked!(n.checked_shl(1));
+                    match c {
+                        '0' => (),
+                        '1' => n = checked!(n.checked_add(1)),
+                        _ => return None,
+                    }
+                }
+
+                n.checked_mul(sign)
+            }
+            NumericValue::Octal(value) => {
+                // log_8(2^63) = 21
+                if value.len() > 21 {
+                    return None;
+                }
+
+                let mut n: i64 = 0;
+                for c in value.chars() {
+                    n = checked!(n.checked_shl(3));
+                    match c {
+                        '0' => (),
+                        '1' => n = checked!(n.checked_add(1)),
+                        '2' => n = checked!(n.checked_add(2)),
+                        '3' => n = checked!(n.checked_add(3)),
+                        '4' => n = checked!(n.checked_add(4)),
+                        '5' => n = checked!(n.checked_add(5)),
+                        '6' => n = checked!(n.checked_add(6)),
+                        '7' => n = checked!(n.checked_add(7)),
+                        _ => return None,
+                    }
+                }
+
+                n.checked_mul(sign)
+            }
+            NumericValue::Decimal(value) => {
+                // log_10(2^63) = 18.96
+                if value.len() > 19 {
+                    return None;
+                }
+
+                let mut n: i64 = 0;
+                for c in value.chars() {
+                    n = checked!(n.checked_mul(10));
+                    match c {
+                        '0' => (),
+                        '1' => n = checked!(n.checked_add(1)),
+                        '2' => n = checked!(n.checked_add(2)),
+                        '3' => n = checked!(n.checked_add(3)),
+                        '4' => n = checked!(n.checked_add(4)),
+                        '5' => n = checked!(n.checked_add(5)),
+                        '6' => n = checked!(n.checked_add(6)),
+                        '7' => n = checked!(n.checked_add(7)),
+                        '8' => n = checked!(n.checked_add(8)),
+                        '9' => n = checked!(n.checked_add(9)),
+                        _ => return None,
+                    }
+                }
+
+                n.checked_mul(sign)
+            }
+            NumericValue::Hexadecimal(value) => {
+                // log_16(2^63) = 15.75
+                if value.len() > 16 {
+                    return None;
+                }
+
+                let mut n: i64 = 0;
+                for c in value.chars() {
+                    n = checked!(n.checked_mul(10));
+                    match c {
+                        '0' => (),
+                        '1' => n = checked!(n.checked_add(1)),
+                        '2' => n = checked!(n.checked_add(2)),
+                        '3' => n = checked!(n.checked_add(3)),
+                        '4' => n = checked!(n.checked_add(4)),
+                        '5' => n = checked!(n.checked_add(5)),
+                        '6' => n = checked!(n.checked_add(6)),
+                        '7' => n = checked!(n.checked_add(7)),
+                        '8' => n = checked!(n.checked_add(8)),
+                        '9' => n = checked!(n.checked_add(9)),
+                        'a' | 'A' => n = checked!(n.checked_add(10)),
+                        'b' | 'B' => n = checked!(n.checked_add(11)),
+                        'c' | 'C' => n = checked!(n.checked_add(12)),
+                        'd' | 'D' => n = checked!(n.checked_add(13)),
+                        'e' | 'E' => n = checked!(n.checked_add(14)),
+                        'f' | 'F' => n = checked!(n.checked_add(15)),
+                        _ => return None,
+                    }
+                }
+
+                n.checked_mul(sign)
+            }
+            NumericValue::Float { .. } => None,
         }
     }
 

@@ -1,6 +1,7 @@
 use sapphire_parser::lex::{Item, Lexer};
 use sapphire_parser::parse::{parse, ParseError};
 use std::fmt;
+use std::pin::Pin;
 
 mod ir;
 
@@ -11,8 +12,8 @@ mod ir;
 #[derive(Debug)]
 pub struct OwnedParseError {
     // these two fields are for all intents and purposes immutable
-    input: Box<String>,
-    _tokens: Box<[Item<'static>]>,
+    input: Pin<Box<String>>,
+    _tokens: Pin<Box<[Item<'static>]>>,
     error: ParseError<'static>,
 }
 
@@ -38,15 +39,12 @@ impl fmt::Display for OwnedParseError {
 
 /// Compiles Ruby source code.
 pub fn compile(input: String) -> Result<(), OwnedParseError> {
-    let input = Box::new(input);
-    // this and tokens_ref are safe because the referenced values will never be moved out
-    // of their boxes
-    // TODO: use Pin when that becomes stable maybe
+    let input = Pin::new(Box::new(input));
     let input_ref = unsafe { &*(&*input as *const String) };
 
-    let tokens = Lexer::new(&input_ref)
+    let tokens = Pin::new(Lexer::new(&input_ref)
         .collect::<Vec<_>>()
-        .into_boxed_slice();
+        .into_boxed_slice());
     let tokens_ref = unsafe { &*(&*tokens as *const [Item]) };
 
     let ast = match parse(&tokens_ref) {
@@ -67,4 +65,21 @@ pub fn compile(input: String) -> Result<(), OwnedParseError> {
         input,
         proc.unwrap().fmt_with_symbols(&symbols)
     )
+}
+
+#[test]
+fn fhjdskahfjksdla() {
+    match compile(
+        "
+def horse
+    for i in cat
+        p i + 1
+    end
+end
+"
+        .into(),
+    ) {
+        Ok(_) => (),
+        Err(e) => panic!("\n{}", e.fmt_ansi()),
+    }
 }
