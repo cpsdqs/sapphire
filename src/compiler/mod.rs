@@ -42,9 +42,11 @@ pub fn compile(input: String) -> Result<(), OwnedParseError> {
     let input = Pin::new(Box::new(input));
     let input_ref = unsafe { &*(&*input as *const String) };
 
-    let tokens = Pin::new(Lexer::new(&input_ref)
-        .collect::<Vec<_>>()
-        .into_boxed_slice());
+    let tokens = Pin::new(
+        Lexer::new(&input_ref)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
     let tokens_ref = unsafe { &*(&*tokens as *const [Item]) };
 
     let ast = match parse(&tokens_ref) {
@@ -61,7 +63,7 @@ pub fn compile(input: String) -> Result<(), OwnedParseError> {
     let mut symbols = crate::symbol::Symbols::new();
     let proc = ir::Proc::new(&ast, &mut symbols);
     unimplemented!(
-        "further compililation of:\n{}\n---\n{}\n",
+        "further compilation of:\n{}\n---\n{}\n",
         input,
         proc.unwrap().fmt_with_symbols(&symbols)
     )
@@ -72,8 +74,9 @@ fn fhjdskahfjksdla() {
     match compile(
         "
 def horse
-    for i in cat
-        p i + 1
+    a = 1
+    for i in 0...10
+        p i + a
     end
 end
 "
