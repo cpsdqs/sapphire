@@ -1,28 +1,50 @@
 //! Intermediate representation.
 
 use crate::symbol::{Symbol, Symbols};
-use fnv::FnvHashMap;
+use fnv::{FnvHashMap, FnvHashSet};
 use sapphire_parser::ast::*;
 use std::collections::BTreeMap;
 use std::{fmt, iter, mem};
 
+/// A register variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Var {
+    /// A local variable from the parent (e.g. in a block), with the depth of the parent
+    /// (usually 1).
+    Parent(usize, usize),
+    /// A local variable in the current proc.
     Local(usize),
+    /// A special white hole variable that will always contain nil.
     Nil,
+    /// A special black hole variable into which unused output is directed.
     Void,
+    /// A reference to the current self.
+    SelfRef,
+}
+
+impl Var {
+    /// Returns true if the variable is from the parent proc.
+    fn is_from_parent(&self) -> bool {
+        match self {
+            Var::Parent(_, _) => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for Var {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Var::Parent(i, depth) => write!(f, "{}var_{}", "^".repeat(*depth), i),
             Var::Local(i) => write!(f, "var_{}", i),
             Var::Nil => write!(f, "nil"),
             Var::Void => write!(f, "void"),
+            Var::SelfRef => write!(f, "self"),
         }
     }
 }
 
+/// A jump label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label(usize);
 
@@ -32,35 +54,56 @@ impl fmt::Display for Label {
     }
 }
 
+/// A local variable scope (and some extras).
+///
+/// Scopes may have a parent scope, in which case variables from the parent scope are accessible.
+/// This should only be used for blocks.
 struct Scope<'a> {
+    /// The parent scope. If this is None, symbols must be Some.
     parent: Option<&'a mut Scope<'a>>,
+    /// Mapping from [Var]s to local variable names.
     variables: &'a mut FnvHashMap<Var, Symbol>,
+    /// List of variables that may be captured in a block.
+    captured_vars: &'a mut FnvHashSet<Var>,
+    /// The symbols table. If this is None, parent must be Some.
     symbols: Option<&'a mut Symbols>,
+    /// Flag that marks the existence of a child proc that can capture variables.
     may_be_captured: &'a mut bool,
+    /// Variable counter for registers.
     var_counter: usize,
+    /// If true, no variables will be created in the current scope. They will instead be created
+    /// in the parent scope.
+    no_local_vars: bool,
 }
 
 impl<'a> Scope<'a> {
+    /// Creates a sub-scope with this scope as the parent.
+    ///
     /// Safety: 'b must be shorter than 'a
     unsafe fn sub_scope<'b>(
         &mut self,
         variables: &'b mut FnvHashMap<Var, Symbol>,
+        captured_vars: &'b mut FnvHashSet<Var>,
         may_be_captured: &'b mut bool,
     ) -> Scope<'b> {
         let borrowck_go_away = mem::transmute::<&mut Scope, &mut Scope>(self);
         Scope {
             parent: Some(borrowck_go_away),
             variables,
+            captured_vars,
             symbols: None,
             may_be_captured,
             var_counter: 0,
+            no_local_vars: false,
         }
     }
 
+    /// Mark this scope as possibly being captured.
     fn may_be_captured(&mut self) {
         *self.may_be_captured = true;
     }
 
+    /// Obtains a symbol by name.
     fn symbol(&mut self, symbol: &str) -> Symbol {
         if let Some(symbols) = &mut self.symbols {
             symbols.symbol(symbol)
@@ -69,6 +112,7 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Obtains the symbol table.
     fn symbols(&mut self) -> &mut Symbols {
         if let Some(symbols) = &mut self.symbols {
             symbols
@@ -77,17 +121,25 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Returns a new register variable.
     fn next_var(&mut self) -> Var {
         self.var_counter += 1;
         Var::Local(self.var_counter)
     }
 
+    /// Returns a new label.
     fn next_label(&mut self) -> Label {
         self.var_counter += 1;
         Label(self.var_counter)
     }
 
+    /// Defines a local variable.
     fn define_local_var(&mut self, name: Symbol) -> Var {
+        if self.no_local_vars {
+            self.parent.as_mut().unwrap().define_local_var(name);
+            return self.parent.as_mut().unwrap().capture_var(name).unwrap();
+        }
+
         if let Some(var) = self.local_var(name) {
             var
         } else {
@@ -97,7 +149,20 @@ impl<'a> Scope<'a> {
         }
     }
 
-    fn local_var(&self, name: Symbol) -> Option<Var> {
+    /// Should only be called by a child scope: captures a local variable.
+    fn capture_var(&mut self, name: Symbol) -> Option<Var> {
+        match self.local_var(name) {
+            Some(Var::Parent(i, depth)) => Some(Var::Parent(i, depth + 1)),
+            Some(Var::Local(i)) => {
+                self.captured_vars.insert(Var::Local(i));
+                Some(Var::Parent(i, 1))
+            }
+            v => v,
+        }
+    }
+
+    /// Returns the local variable with the given name.
+    fn local_var(&mut self, name: Symbol) -> Option<Var> {
         let var = self
             .variables
             .iter()
@@ -108,12 +173,14 @@ impl<'a> Scope<'a> {
             Some(var) => Some(var),
             None => self
                 .parent
-                .as_ref()
-                .map_or(None, |parent| parent.local_var(name)),
+                .as_mut()
+                .map_or(None, |parent| parent.capture_var(name)),
         }
     }
 }
 
+/// Errors that may occur when creating the IR.
+/// Most of these are likely symptoms of an invalid AST.
 #[derive(Debug)]
 pub enum IRError {
     InvalidConstPath(Ident),
@@ -125,18 +192,35 @@ pub enum IRError {
     TooManySplats,
 }
 
+// TODO: spans?
+
+impl fmt::Display for IRError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IRError::InvalidConstPath(ident) => write!(f, "invalid const path “{}”", ident),
+            IRError::InvalidMethodName(ident) => write!(f, "invalid method name “{}”", ident),
+            IRError::InvalidModuleName(ident) => write!(f, "invalid module name “{}”", ident),
+            IRError::InvalidLeftHandSide(ident) => {
+                write!(f, "invalid left-hand side “{}”", ident)
+            }
+            IRError::InvalidMember(ident) => write!(f, "invalid member “{}”", ident),
+            IRError::InvalidDefined => write!(f, "invalid defined? (somewhere…)"),
+            IRError::TooManySplats => write!(f, "too many splats (somewhere…)"),
+        }
+    }
+}
+
+/// IR operations.
 #[derive(Debug)]
 pub enum IROp {
     /// Loads the root (::) into the local variable.
     LoadRoot(Var),
-    /// Loads self into the local variable.
-    LoadSelf(Var),
     /// Loads a boolean value into the local variable.
     LoadBool(Var, bool),
     /// Loads a reference to a global variable into the local variable.
     LoadGlobal(Var, Symbol),
     /// Loads a reference to a constant into the local variable.
-    LoadConst(Var, Option<Var>, Symbol),
+    LoadConst(Var, Var, Symbol),
     /// Loads a reference to a class variable into the local variable.
     LoadClassVar(Var, Symbol),
     /// Loads a reference to an instance variable into the local variable.
@@ -149,8 +233,10 @@ pub enum IROp {
     LoadSymbol(Var, Symbol),
     /// Loads an i64 number into the local variable.
     LoadI64(Var, i64),
+    /// Loads a float number into the local variable.
+    LoadFloat(Var, f64),
     /// Loads a proc into the local variable.
-    LoadProc(Var, Proc),
+    LoadProc(Var, IRProc),
     /// Pushes a positional argument.
     Arg(Var),
     /// Pushes an associative argument.
@@ -160,7 +246,7 @@ pub enum IROp {
     /// Pushes a block argument.
     ArgBlock(Var),
     /// Calls a method and loads the result into a local variable.
-    Call(Var, Option<Var>, Symbol),
+    Call(Var, Var, Symbol),
     /// Calls super and loads the result into a local variable.
     Super(Var),
     /// Performs the not operation on the second argument and loads it into the first argument.
@@ -193,8 +279,6 @@ pub enum IROp {
     RescueBind(Var),
     /// End of a rescuable section.
     EndRescue,
-    /// `defined?` for a local variable.
-    DefinedLocal(Var, Symbol),
     /// `defined?` for a constant variable.
     DefinedConst(Var, Symbol),
     /// `defined?` for a global variable.
@@ -203,38 +287,29 @@ pub enum IROp {
     DefinedClassVar(Var, Symbol),
     /// `defined?` for an instance variable.
     DefinedIVar(Var, Symbol),
-    /// `break`
-    Break,
     /// `yield`
-    Yield,
-    /// `next`
-    Next,
-    /// `redo`
-    Redo,
-    /// `retry`
-    Retry,
+    Yield(Var),
     /// Defines a module.
-    DefModule(Option<Var>, Symbol, Proc),
+    DefModule(Var, Symbol, IRProc),
     /// Defines a class.
-    DefClass(Option<Var>, Symbol, Option<Var>, Proc),
+    DefClass(Var, Symbol, Option<Var>, IRProc),
     /// Defines a method.
     // TODO: params?
-    DefMethod(Symbol, Proc),
+    DefMethod(Symbol, IRProc),
     /// Defines a singleton class.
-    DefSingletonClass(Var, Proc),
+    DefSingletonClass(Var, IRProc),
     /// Defines a singleton method.
     // TODO: params?
-    DefSingletonMethod(Var, Symbol, Proc),
+    DefSingletonMethod(Var, Symbol, IRProc),
 }
 
-// TODO: remove DefinedLocal
-
 impl IROp {
-    fn read_write_vars<F: FnMut(&mut Var, bool)>(&mut self, mut cb: F) {
+    /// Iterates over all variables referenced in the IROp. If they are being written to, the write
+    /// flag will be true.
+    pub(super) fn for_each_var<F: FnMut(&mut Var, bool)>(&mut self, mut cb: F) {
         use IROp::*;
         match self {
             LoadRoot(var)
-            | LoadSelf(var)
             | LoadBool(var, _)
             | LoadGlobal(var, _)
             | LoadClassVar(var, _)
@@ -242,16 +317,16 @@ impl IROp {
             | LoadString(var, _)
             | LoadSymbol(var, _)
             | LoadI64(var, _)
+            | LoadFloat(var, _)
             | LoadProc(var, _)
             | Super(var)
-            | RescueBind(var) => cb(var, true),
-            LoadConst(out, inp, _) | Call(out, inp, _) => {
-                if let Some(inp) = inp {
-                    cb(inp, false)
-                }
-                cb(out, true);
-            }
-            AppendString(out, inp) | Not(out, inp) | Assign(out, inp) => {
+            | RescueBind(var)
+            | Yield(var) => cb(var, true),
+            LoadConst(out, inp, _)
+            | AppendString(out, inp)
+            | Call(out, inp, _)
+            | Not(out, inp)
+            | Assign(out, inp) => {
                 cb(inp, false);
                 cb(out, true);
             }
@@ -266,36 +341,20 @@ impl IROp {
             | AssignClassVar(_, var)
             | AssignIVar(_, var)
             | RescueMatch(var, _)
-            | DefinedLocal(var, _)
             | DefinedConst(var, _)
             | DefinedGlobal(var, _)
             | DefinedClassVar(var, _)
             | DefinedIVar(var, _)
+            | DefModule(var, _, _)
             | DefSingletonClass(var, _)
             | DefSingletonMethod(var, _, _) => cb(var, false),
             ArgAssoc(var, var2) => {
                 cb(var, false);
                 cb(var2, false);
             }
-            Label(_)
-            | Jump(_)
-            | BeginRescue(_)
-            | EndRescue
-            | Break
-            | Yield
-            | Next
-            | Redo
-            | Retry
-            | DefMethod(_, _) => (),
-            DefModule(var, _, _) => {
-                if let Some(var) = var {
-                    cb(var, false);
-                }
-            }
+            Label(_) | Jump(_) | BeginRescue(_) | EndRescue | DefMethod(_, _) => (),
             DefClass(var, _, var2, _) => {
-                if let Some(var) = var {
-                    cb(var, false);
-                };
+                cb(var, false);
                 if let Some(var) = var2 {
                     cb(var, false);
                 };
@@ -303,11 +362,11 @@ impl IROp {
         }
     }
 
+    /// Returns true if the operation is useless, e.g. if it’s loading an i64 into [Var::Void].
     fn is_useless(&self) -> bool {
         use IROp::*;
         match self {
             LoadRoot(out)
-            | LoadSelf(out)
             | LoadBool(out, _)
             | LoadGlobal(out, _)
             | LoadConst(out, _, _)
@@ -316,15 +375,15 @@ impl IROp {
             | LoadString(out, _)
             | LoadSymbol(out, _)
             | LoadI64(out, _)
+            | LoadFloat(out, _)
             | LoadProc(out, _)
-            | Assign(out, _)
             | RescueBind(out)
-            | DefinedLocal(out, _)
             | DefinedConst(out, _)
             | DefinedGlobal(out, _)
             | DefinedClassVar(out, _)
             | DefinedIVar(out, _)
             | Not(out, _) => *out == Var::Void,
+            Assign(out, inp) => *out == Var::Void || *out == *inp,
             AppendString(out, inp) => *out == Var::Void || *inp == Var::Nil,
             JumpIf(cond, _) => *cond == Var::Nil,
             Arg(_)
@@ -344,11 +403,7 @@ impl IROp {
             | BeginRescue(_)
             | RescueMatch(_, _)
             | EndRescue
-            | Break
-            | Yield
-            | Next
-            | Redo
-            | Retry
+            | Yield(_)
             | DefModule(_, _, _)
             | DefClass(_, _, _, _)
             | DefMethod(_, _)
@@ -357,6 +412,7 @@ impl IROp {
         }
     }
 
+    /// Pretty-prints the IROp with the given symbol table.
     pub fn fmt_with_symbols(&self, symbols: &Symbols) -> String {
         macro_rules! sym {
             ($i:expr) => {
@@ -368,28 +424,22 @@ impl IROp {
         }
         match self {
             IROp::LoadRoot(var) => format!("{} = (::);", var),
-            IROp::LoadSelf(var) => format!("{} = self;", var),
             IROp::LoadBool(var, value) => format!("{} = {};", var, value),
             IROp::LoadGlobal(var, name) => format!("{} = ${};", var, sym!(name)),
-            IROp::LoadConst(var, parent, name) => match parent {
-                Some(parent) => format!("{} = {}::{};", var, parent, sym!(name)),
-                None => format!("{} = {};", var, sym!(name)),
-            },
+            IROp::LoadConst(var, parent, name) => format!("{} = {}::{};", var, parent, sym!(name)),
             IROp::LoadClassVar(var, name) => format!("{} = @@{};", var, sym!(name)),
             IROp::LoadIVar(var, name) => format!("{} = @{};", var, sym!(name)),
             IROp::LoadString(var, string) => format!("{} = {:?};", var, string),
             IROp::AppendString(var, other) => format!("{} += {}.to_s;", var, other),
             IROp::LoadSymbol(var, symbol) => format!("{} = :{};", var, sym!(symbol)),
             IROp::LoadI64(var, value) => format!("{} = {};", var, value),
+            IROp::LoadFloat(var, value) => format!("{} = {};", var, value),
             IROp::LoadProc(var, proc) => format!("{} = {};", var, proc.fmt_with_symbols(symbols)),
             IROp::Arg(var) => format!("push_arg {};", var),
             IROp::ArgAssoc(key, val) => format!("push_arg {} => {};", key, val),
             IROp::ArgSplat(var) => format!("push_arg *{};", var),
             IROp::ArgBlock(var) => format!("push_arg &{};", var),
-            IROp::Call(out, recv, name) => match recv {
-                Some(recv) => format!("{} = {}.{}();", out, recv, sym!(name)),
-                None => format!("{} = {}();", out, sym!(name)),
-            },
+            IROp::Call(out, recv, name) => format!("{} = {}.{}();", out, recv, sym!(name)),
             IROp::Super(out) => format!("{} = super();", out),
             IROp::Not(out, var) => format!("{} = not {};", out, var),
             IROp::Label(label) => format!("{}", label),
@@ -406,48 +456,31 @@ impl IROp {
             IROp::RescueMatch(class, label) => format!("rescue instanceof {} -> {}", class, label),
             IROp::RescueBind(var) => format!("rescue => {};", var),
             IROp::EndRescue => format!("end rescue"),
-            IROp::DefinedLocal(var, name) => format!("{} = defined? {};", var, sym!(name)),
             IROp::DefinedConst(var, name) => format!("{} = defined? {};", var, sym!(name)),
             IROp::DefinedGlobal(var, name) => format!("{} = defined? ${};", var, sym!(name)),
             IROp::DefinedClassVar(var, name) => format!("{} = defined? @@{};", var, sym!(name)),
             IROp::DefinedIVar(var, name) => format!("{} = defined? ${};", var, sym!(name)),
-            IROp::Break => format!("break();"),
-            IROp::Yield => format!("yield();"),
-            IROp::Next => format!("next();"),
-            IROp::Redo => format!("redo;"),
-            IROp::Retry => format!("retry;"),
-            IROp::DefModule(parent, name, proc) => match parent {
-                Some(parent) => format!(
-                    "module {}::{}: {}",
-                    parent,
-                    sym!(name),
-                    proc.fmt_with_symbols(symbols)
-                ),
-                None => format!("module {}: {}", sym!(name), proc.fmt_with_symbols(symbols)),
-            },
-            IROp::DefClass(parent, name, superclass, proc) => match (parent, superclass) {
-                (Some(parent), Some(superclass)) => format!(
+            IROp::Yield(var) => format!("{} = yield();", var),
+            IROp::DefModule(parent, name, proc) => format!(
+                "module {}::{}: {}",
+                parent,
+                sym!(name),
+                proc.fmt_with_symbols(symbols)
+            ),
+            IROp::DefClass(parent, name, superclass, proc) => match superclass {
+                Some(superclass) => format!(
                     "class {}::{} < {}: {}",
                     parent,
                     sym!(name),
                     superclass,
                     proc.fmt_with_symbols(symbols)
                 ),
-                (Some(parent), None) => format!(
+                None => format!(
                     "class {}::{}: {}",
                     parent,
                     sym!(name),
                     proc.fmt_with_symbols(symbols)
                 ),
-                (None, Some(superclass)) => format!(
-                    "class {} < {}: {}",
-                    sym!(name),
-                    superclass,
-                    proc.fmt_with_symbols(symbols)
-                ),
-                (None, None) => {
-                    format!("module {}: {}", sym!(name), proc.fmt_with_symbols(symbols))
-                }
             },
             IROp::DefMethod(name, proc) => {
                 format!("def {}: {}", sym!(name), proc.fmt_with_symbols(symbols))
@@ -465,58 +498,54 @@ impl IROp {
     }
 }
 
+/// An IR proc.
 #[derive(Debug)]
-pub struct Proc {
-    variables: FnvHashMap<Var, Symbol>,
-    may_be_captured: bool,
-    is_block: bool,
-    items: Vec<IROp>,
+pub struct IRProc {
+    /// The name of the proc.
+    /// This is usually the defined method name, class name, or an internal name.
+    pub(super) name: Symbol,
+    /// Mapping of register variables to local variable names.
+    pub(super) variables: FnvHashMap<Var, Symbol>,
+    /// List of captured variables.
+    pub(super) captured_vars: FnvHashSet<Var>,
+    /// If true, this proc may be captured in a block.
+    pub(super) may_be_captured: bool,
+    /// If true, this proc is a block.
+    pub(super) is_block: bool,
+    /// IR ops.
+    pub(super) items: Vec<IROp>,
 }
 
-impl Proc {
-    pub fn new(statements: &[Statement], symbols: &mut Symbols) -> Result<Proc, IRError> {
+impl IRProc {
+    /// Creates a new proc with the given list of statements.
+    pub fn new(
+        name: Symbol,
+        statements: &[Statement],
+        symbols: &mut Symbols,
+    ) -> Result<IRProc, IRError> {
         let mut variables = FnvHashMap::default();
+        let mut captured_vars = FnvHashSet::default();
         let mut items = Vec::new();
         let mut may_be_captured = false;
 
         let mut scope = Scope {
             parent: None,
             variables: &mut variables,
+            captured_vars: &mut captured_vars,
             symbols: Some(symbols),
             may_be_captured: &mut may_be_captured,
             var_counter: 0,
+            no_local_vars: false,
         };
 
         let out = scope.next_var();
         Self::expand_statements(statements, out, &mut scope, &mut items)?;
         items.push(IROp::Return(out));
 
-        Ok(Proc {
+        let mut proc = IRProc {
+            name,
             variables,
-            may_be_captured,
-            is_block: false,
-            items,
-        })
-    }
-
-    fn new_with_body(body: &BodyStatement, symbols: &mut Symbols) -> Result<Proc, IRError> {
-        let mut variables = FnvHashMap::default();
-        let mut items = Vec::new();
-        let mut may_be_captured = false;
-
-        let mut scope = Scope {
-            parent: None,
-            variables: &mut variables,
-            symbols: Some(symbols),
-            may_be_captured: &mut may_be_captured,
-            var_counter: 0,
-        };
-
-        let out = Self::expand_body_statement(body, &mut scope, &mut items)?;
-        items.push(IROp::Return(out));
-
-        let mut proc = Proc {
-            variables,
+            captured_vars,
             may_be_captured,
             is_block: false,
             items,
@@ -525,6 +554,47 @@ impl Proc {
         Ok(proc)
     }
 
+    /// Creates a proc with a body statement.
+    fn new_with_body(
+        name: Symbol,
+        body: &BodyStatement,
+        symbols: &mut Symbols,
+    ) -> Result<IRProc, IRError> {
+        let mut variables = FnvHashMap::default();
+        let mut captured_vars = FnvHashSet::default();
+        let mut items = Vec::new();
+        let mut may_be_captured = false;
+
+        let mut scope = Scope {
+            parent: None,
+            variables: &mut variables,
+            captured_vars: &mut captured_vars,
+            symbols: Some(symbols),
+            may_be_captured: &mut may_be_captured,
+            var_counter: 0,
+            no_local_vars: false,
+        };
+
+        let out = Self::expand_body_statement(body, &mut scope, &mut items)?;
+        items.push(IROp::Return(out));
+
+        let mut proc = IRProc {
+            name,
+            variables,
+            captured_vars,
+            may_be_captured,
+            is_block: false,
+            items,
+        };
+        proc.optimize();
+        Ok(proc)
+    }
+
+    /// Optimization:
+    ///
+    /// - collapsing register variables
+    /// - collapsing redundant labels
+    /// - stripping useless operations
     fn optimize(&mut self) {
         self.collapse_vars();
         self.collapse_labels();
@@ -543,18 +613,19 @@ impl Proc {
         }
     }
 
-    /// Collapses variables.
+    /// Collapses variables and replaces nil-reads and void-writes with [Var::Nil] and [Var::Void].
+    ///
+    /// “Collapsing variables” refers to merging two variables for which the proc could be
+    /// partitioned into two sections such that in both sections only one of the two variables is
+    /// used. Since nil-reads will be turned into [Var::Nil], this shouldn’t create any unexpected
+    /// behavior.
     fn collapse_vars(&mut self) {
-        if self.may_be_captured || self.is_block {
-            return;
-        }
-
         // find first and last reads/writes of variables
         let mut first_rws: FnvHashMap<Var, (Option<usize>, Option<usize>)> = FnvHashMap::default();
         let mut last_rws: FnvHashMap<Var, (Option<usize>, Option<usize>)> = FnvHashMap::default();
 
         for (i, item) in self.items.iter_mut().enumerate() {
-            item.read_write_vars(|var, is_write| {
+            item.for_each_var(|var, is_write| {
                 first_rws
                     .entry(*var)
                     .and_modify(|(read, write)| {
@@ -594,9 +665,17 @@ impl Proc {
         // only exist from their first write to their last read
         let mut replace_with_nil_up_to = FnvHashMap::default();
         let mut replace_with_void_from = FnvHashMap::default();
+
+        // List of first-used (created) and never-again--used (destroyed) variables in each
+        // operation.
         let mut var_lifetimes: BTreeMap<usize, (Vec<Var>, Vec<Var>)> = BTreeMap::new();
 
         for (var, (first_read, first_write)) in first_rws {
+            if self.captured_vars.contains(&var) || var.is_from_parent() {
+                // Can’t remap a variable that’s used elsewhere
+                continue;
+            }
+
             match (first_read, first_write) {
                 (Some(first_read), Some(first_write)) => {
                     if first_read < first_write {
@@ -609,11 +688,11 @@ impl Proc {
                         .or_insert((vec![var], Vec::new()));
                 }
                 (Some(_), None) => {
-                    // Read, but never written to
+                    // Read, but never written to: will always be nil
                     replace_with_nil_up_to.insert(var, self.items.len());
                 }
                 (None, Some(_)) => {
-                    // Written to, but never read
+                    // Written to, but never read: can be replaced with [Var::Void]
                     replace_with_void_from.insert(var, 0);
                 }
                 (None, None) => (),
@@ -633,40 +712,52 @@ impl Proc {
             }
         }
 
-        let mut var_slots: Vec<Option<Var>> = Vec::new();
+        // Variable “slots” with
+        // (mapped-to variable, currently occupying variable, was occupied by a named variable)
+        let mut var_slots: Vec<(Var, Option<Var>, bool)> = Vec::new();
         let mut var_mapping = FnvHashMap::default();
 
         for (_, (created, destroyed)) in var_lifetimes {
-            for var in created {
-                let mut needs_new_slot = true;
-                if !self.variables.contains_key(&var) {
-                    // named variables always need a new slot
-                    // but this is an unnamed variable so it can use an existing one
-                    for (i, slot) in var_slots.iter_mut().enumerate() {
-                        if slot.is_none() {
-                            *slot = Some(var);
-                            var_mapping.insert(var, Var::Local(i));
-                            needs_new_slot = false;
-                        }
-                    }
-                }
-                if needs_new_slot {
-                    var_mapping.insert(var, Var::Local(var_slots.len()));
-                    var_slots.push(Some(var));
-                }
-            }
-
+            // Free slots first.
+            // Because making an operation read from and write to the same register is allowed,
+            // this can save extra registers e.g. in an assignment `a = b` if b will never be used
+            // again and a has never been used before.
             for var in destroyed {
-                for slot in &mut var_slots {
+                for (_, slot, _) in &mut var_slots {
                     if *slot == Some(var) {
                         *slot = None;
                     }
                 }
             }
+
+            for var in created {
+                let mut needs_new_slot = true;
+                let is_named_var = self.variables.contains_key(&var);
+                for (slot_key, slot, slot_is_named) in var_slots.iter_mut() {
+                    if is_named_var && *slot_is_named {
+                        // don’t merge two named local variables
+                        continue;
+                    }
+                    if slot.is_none() {
+                        *slot = Some(var);
+                        var_mapping.insert(var, *slot_key);
+                        needs_new_slot = false;
+                        if is_named_var {
+                            *slot_is_named = true;
+                        }
+                    }
+                }
+                if needs_new_slot {
+                    let slot_key = var;
+                    var_mapping.insert(var, slot_key);
+                    var_slots.push((slot_key, Some(slot_key), is_named_var));
+                }
+            }
         }
 
+        // Actually perform the variable remapping
         for (index, item) in self.items.iter_mut().enumerate() {
-            item.read_write_vars(|var, _| {
+            item.for_each_var(|var, _| {
                 if let Some(i) = replace_with_nil_up_to.get(var) {
                     if index < *i {
                         *var = Var::Nil;
@@ -695,8 +786,6 @@ impl Proc {
             })
             .collect();
         mem::forget(mem::replace(&mut self.variables, variables));
-
-        // TODO: detect redundant assignments like `b = a; c = b`
     }
 
     /// Collapses consecutive labels.
@@ -853,7 +942,7 @@ impl Proc {
                     let name = scope.symbol(name);
                     let out = scope.next_var();
                     items.push(IROp::LoadRoot(out));
-                    items.push(IROp::LoadConst(out, Some(out), name));
+                    items.push(IROp::LoadConst(out, out, name));
                     Ok(out)
                 }
                 _ => Err(IRError::InvalidConstPath(ident.clone())),
@@ -863,7 +952,7 @@ impl Proc {
                     let name = scope.symbol(name);
                     let expr = Self::expand_expr(expr, scope, items)?;
                     let out = scope.next_var();
-                    items.push(IROp::LoadConst(out, Some(expr), name));
+                    items.push(IROp::LoadConst(out, expr, name));
                     Ok(out)
                 }
                 _ => Err(IRError::InvalidConstPath(ident.clone())),
@@ -874,6 +963,8 @@ impl Proc {
                     Literal::Number { positive, value } => {
                         if let Some(number) = Self::number_to_i64(*positive, value) {
                             items.push(IROp::LoadI64(out, number));
+                        } else if let Some(number) = Self::number_to_float(*positive, value) {
+                            items.push(IROp::LoadFloat(out, number));
                         } else {
                             unimplemented!("load float or bignum")
                         }
@@ -932,18 +1023,30 @@ impl Proc {
             Expression::Block(block) => {
                 scope.may_be_captured();
 
+                // TODO: lambdas?
+
                 let mut variables = FnvHashMap::default();
+                let mut captured_vars = FnvHashSet::default();
                 let mut block_items = Vec::new();
                 let mut may_be_captured = false;
 
-                let mut block_scope =
-                    unsafe { scope.sub_scope(&mut variables, &mut may_be_captured) };
+                let mut block_scope = unsafe {
+                    scope.sub_scope(&mut variables, &mut captured_vars, &mut may_be_captured)
+                };
                 let out = block_scope.next_var();
                 Self::expand_statements(&block.body, out, &mut block_scope, &mut block_items)?;
                 block_items.push(IROp::Return(out));
 
-                let proc = Proc {
+                let name = if block.lambda {
+                    scope.symbol("[lambda]")
+                } else {
+                    scope.symbol("[block]")
+                };
+
+                let proc = IRProc {
+                    name,
                     variables,
+                    captured_vars,
                     may_be_captured,
                     is_block: true,
                     items: block_items,
@@ -957,11 +1060,7 @@ impl Proc {
                 let out = scope.next_var();
                 Ok(out)
             }
-            Expression::SelfExpr => {
-                let out = scope.next_var();
-                items.push(IROp::LoadSelf(out));
-                Ok(out)
-            }
+            Expression::SelfExpr => Ok(Var::SelfRef),
             Expression::True | Expression::False => {
                 let is_true = expr == &Expression::True;
                 let out = scope.next_var();
@@ -971,17 +1070,17 @@ impl Proc {
             Expression::ArrayConstructor(args) => {
                 let out = scope.next_var();
                 items.push(IROp::LoadRoot(out));
-                items.push(IROp::LoadConst(out, Some(out), scope.symbol("Array")));
+                items.push(IROp::LoadConst(out, out, scope.symbol("Array")));
                 if let Some(args) = args {
                     Self::expand_args(args, scope, items)?;
                 }
-                items.push(IROp::Call(out, Some(out), scope.symbol("new")));
+                items.push(IROp::Call(out, out, scope.symbol("new")));
                 Ok(out)
             }
             Expression::HashConstructor(args) => {
                 let out = scope.next_var();
                 items.push(IROp::LoadRoot(out));
-                items.push(IROp::LoadConst(out, Some(out), scope.symbol("Hash")));
+                items.push(IROp::LoadConst(out, out, scope.symbol("Hash")));
                 Self::expand_args(
                     &Arguments {
                         block: None,
@@ -991,7 +1090,7 @@ impl Proc {
                     scope,
                     items,
                 )?;
-                items.push(IROp::Call(out, Some(out), scope.symbol("new")));
+                items.push(IROp::Call(out, out, scope.symbol("new")));
                 Ok(out)
             }
             Expression::Not(expr) => {
@@ -1031,17 +1130,17 @@ impl Proc {
             }
             Expression::UMinus(expr) => {
                 let out = Self::expand_expr(expr, scope, items)?;
-                items.push(IROp::Call(out, Some(out), scope.symbol("-@")));
+                items.push(IROp::Call(out, out, scope.symbol("-@")));
                 Ok(out)
             }
             Expression::UPlus(expr) => {
                 let out = Self::expand_expr(expr, scope, items)?;
-                items.push(IROp::Call(out, Some(out), scope.symbol("+@")));
+                items.push(IROp::Call(out, out, scope.symbol("+@")));
                 Ok(out)
             }
             Expression::BitInv(expr) => {
                 let out = Self::expand_expr(expr, scope, items)?;
-                items.push(IROp::Call(out, Some(out), scope.symbol("~")));
+                items.push(IROp::Call(out, out, scope.symbol("~")));
                 Ok(out)
             }
             Expression::BinOp(lhs, op, rhs) => {
@@ -1077,7 +1176,7 @@ impl Proc {
                     Rem => "%",
                 };
 
-                items.push(IROp::Call(lhs, Some(lhs), scope.symbol(op)));
+                items.push(IROp::Call(lhs, lhs, scope.symbol(op)));
                 Ok(lhs)
             }
             Expression::If {
@@ -1228,7 +1327,7 @@ impl Proc {
                         items.push(IROp::Arg(end_var));
                         items.push(IROp::Call(
                             loop_cond,
-                            Some(counter),
+                            counter,
                             if *inclusive {
                                 scope.symbol("<=")
                             } else {
@@ -1238,7 +1337,7 @@ impl Proc {
                         items.push(IROp::JumpIfNot(loop_cond, end_label));
                         Self::expand_statements(body, out, scope, items)?;
                         items.push(IROp::Arg(one));
-                        items.push(IROp::Call(out, Some(counter), scope.symbol("+=")));
+                        items.push(IROp::Call(out, counter, scope.symbol("+=")));
                         items.push(IROp::Jump(top_label));
                         items.push(IROp::Label(end_label));
                     }
@@ -1247,13 +1346,22 @@ impl Proc {
                     let mut block_items = Vec::new();
 
                     // TODO: assign block params
+                    let mut variables = FnvHashMap::default();
+                    let mut captured_vars = FnvHashSet::default();
+                    let mut may_be_captured = false;
 
+                    let mut for_scope = unsafe {
+                        scope.sub_scope(&mut variables, &mut captured_vars, &mut may_be_captured)
+                    };
+                    for_scope.no_local_vars = true;
                     let out = scope.next_var();
+                    Self::expand_statements(body, out, &mut for_scope, &mut block_items)?;
                     scope.may_be_captured();
-                    Self::expand_statements(body, out, scope, &mut block_items)?;
 
-                    let block = Proc {
+                    let block = IRProc {
+                        name: scope.symbol("[for block]"),
                         items: block_items,
+                        captured_vars: FnvHashSet::default(),
                         may_be_captured: false,
                         is_block: true,
                         variables: FnvHashMap::default(),
@@ -1263,7 +1371,7 @@ impl Proc {
                     let block_var = scope.next_var();
                     items.push(IROp::LoadProc(block_var, block));
                     items.push(IROp::ArgBlock(block_var));
-                    items.push(IROp::Call(expr, Some(expr), scope.symbol("each")));
+                    items.push(IROp::Call(expr, expr, scope.symbol("each")));
 
                     Ok(Var::Nil)
                 }
@@ -1282,33 +1390,33 @@ impl Proc {
                             return Err(IRError::InvalidMethodName(name.clone()));
                         }
                     };
-                    items.push(IROp::Call(out, Some(out), name));
+                    items.push(IROp::Call(out, out, name));
                     Ok(out)
                 } else {
                     Self::expand_args(args, scope, items)?;
                     let out = scope.next_var();
                     match name {
                         Ident::Local(s) | Ident::MethodOnly(s) | Ident::AssignmentMethod(s) => {
-                            items.push(IROp::Call(out, None, scope.symbol(s)));
+                            items.push(IROp::Call(out, Var::SelfRef, scope.symbol(s)));
                         }
                         Ident::Keyword(s) => {
-                            items.push(IROp::Call(out, None, scope.symbol(s)));
+                            items.push(IROp::Call(out, Var::SelfRef, scope.symbol(s)));
                         }
                         Ident::Global(name) => {
                             items.push(IROp::LoadGlobal(out, scope.symbol(name)));
-                            items.push(IROp::Call(out, Some(out), scope.symbol("call")));
+                            items.push(IROp::Call(out, out, scope.symbol("call")));
                         }
                         Ident::Const(name) => {
-                            items.push(IROp::LoadConst(out, None, scope.symbol(name)));
-                            items.push(IROp::Call(out, Some(out), scope.symbol("call")));
+                            items.push(IROp::LoadConst(out, Var::SelfRef, scope.symbol(name)));
+                            items.push(IROp::Call(out, out, scope.symbol("call")));
                         }
                         Ident::Class(name) => {
                             items.push(IROp::LoadClassVar(out, scope.symbol(name)));
-                            items.push(IROp::Call(out, Some(out), scope.symbol("call")));
+                            items.push(IROp::Call(out, out, scope.symbol("call")));
                         }
                         Ident::Instance(name) => {
                             items.push(IROp::LoadIVar(out, scope.symbol(name)));
-                            items.push(IROp::Call(out, Some(out), scope.symbol("call")));
+                            items.push(IROp::Call(out, out, scope.symbol("call")));
                         }
                     };
                     Ok(out)
@@ -1318,7 +1426,7 @@ impl Proc {
                 let expr = Self::expand_expr(expr, scope, items)?;
                 Self::expand_args(args, scope, items)?;
                 let out = scope.next_var();
-                items.push(IROp::Call(out, Some(expr), scope.symbol("[]")));
+                items.push(IROp::Call(out, expr, scope.symbol("[]")));
                 Ok(out)
             }
             Expression::Defined(expr) => match &**expr {
@@ -1326,7 +1434,9 @@ impl Proc {
                     Ident::Local(name) => {
                         let name = scope.symbol(name);
                         let out = scope.next_var();
-                        items.push(IROp::DefinedLocal(out, name));
+                        if let Some(_) = scope.local_var(name) {
+                            items.push(IROp::LoadString(out, "local-variable".into()));
+                        }
                         Ok(out)
                     }
                     Ident::Const(name) => {
@@ -1372,38 +1482,19 @@ impl Proc {
                     Ok(nil)
                 }
             }
-            Expression::Break(args) => {
-                if let Some(_args) = args {
-                    unimplemented!("break with args")
-                } else {
-                    items.push(IROp::Break);
-                    Ok(Var::Nil)
-                }
-            }
+            Expression::Break(_args) => unimplemented!("break"),
             Expression::Yield(args) => {
                 if let Some(_args) = args {
                     unimplemented!("yield with args")
                 } else {
-                    items.push(IROp::Yield);
-                    Ok(Var::Nil)
+                    let out = scope.next_var();
+                    items.push(IROp::Yield(out));
+                    Ok(out)
                 }
             }
-            Expression::Next(args) => {
-                if let Some(_args) = args {
-                    unimplemented!("next with args")
-                } else {
-                    items.push(IROp::Next);
-                    Ok(Var::Nil)
-                }
-            }
-            Expression::Redo => {
-                items.push(IROp::Redo);
-                Ok(Var::Nil)
-            }
-            Expression::Retry => {
-                items.push(IROp::Retry);
-                Ok(Var::Nil)
-            }
+            Expression::Next(_args) => unimplemented!("next"),
+            Expression::Redo => unimplemented!("redo"),
+            Expression::Retry => unimplemented!("retry"),
             Expression::Statements(statements) => {
                 let out = scope.next_var();
                 Self::expand_statements(statements, out, scope, items)?;
@@ -1429,15 +1520,14 @@ impl Proc {
 
                 let out = scope.next_var();
                 items.push(IROp::LoadRoot(out));
-                items.push(IROp::LoadConst(out, Some(out), scope.symbol("Range")));
+                items.push(IROp::LoadConst(out, out, scope.symbol("Range")));
                 items.push(IROp::Arg(start));
                 items.push(IROp::Arg(end));
                 items.push(IROp::Arg(incl));
-                items.push(IROp::Call(out, Some(out), scope.symbol("new")));
+                items.push(IROp::Call(out, out, scope.symbol("new")));
                 Ok(out)
             }
             Expression::Module { path, body } => {
-                let body = Proc::new_with_body(body, scope.symbols())?;
                 match path {
                     DefPath::Member(expr, name) => {
                         let expr = Self::expand_expr(expr, scope, items)?;
@@ -1445,7 +1535,8 @@ impl Proc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        items.push(IROp::DefModule(Some(expr), name, body));
+                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        items.push(IROp::DefModule(expr, name, body));
                     }
                     DefPath::Root(name) => {
                         let root = scope.next_var();
@@ -1454,14 +1545,16 @@ impl Proc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        items.push(IROp::DefModule(Some(root), name, body));
+                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        items.push(IROp::DefModule(root, name, body));
                     }
                     DefPath::Current(name) => {
                         let name = scope.symbol(match name {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        items.push(IROp::DefModule(None, name, body));
+                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        items.push(IROp::DefModule(Var::SelfRef, name, body));
                     }
                 }
                 Ok(Var::Nil)
@@ -1471,7 +1564,6 @@ impl Proc {
                 superclass,
                 body,
             } => {
-                let body = Proc::new_with_body(body, scope.symbols())?;
                 let superclass = if let Some(superclass) = superclass {
                     Some(Self::expand_expr(superclass, scope, items)?)
                 } else {
@@ -1484,7 +1576,8 @@ impl Proc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        items.push(IROp::DefClass(Some(expr), name, superclass, body));
+                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        items.push(IROp::DefClass(expr, name, superclass, body));
                     }
                     DefPath::Root(name) => {
                         let root = scope.next_var();
@@ -1493,14 +1586,16 @@ impl Proc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        items.push(IROp::DefClass(Some(root), name, superclass, body));
+                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        items.push(IROp::DefClass(root, name, superclass, body));
                     }
                     DefPath::Current(name) => {
                         let name = scope.symbol(match name {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        items.push(IROp::DefClass(None, name, superclass, body));
+                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        items.push(IROp::DefClass(Var::SelfRef, name, superclass, body));
                     }
                 }
                 Ok(Var::Nil)
@@ -1531,14 +1626,15 @@ impl Proc {
 
                 // TODO: deal with params
 
-                let body = Proc::new_with_body(body, scope.symbols())?;
+                let body = IRProc::new_with_body(name, body, scope.symbols())?;
                 items.push(IROp::DefMethod(name, body));
 
                 Ok(Var::Nil)
             }
             Expression::SingletonClass { expr, body } => {
                 let expr = Self::expand_expr(expr, scope, items)?;
-                let body = Proc::new_with_body(body, scope.symbols())?;
+                let name = scope.symbol("[singleton class]");
+                let body = IRProc::new_with_body(name, body, scope.symbols())?;
                 items.push(IROp::DefSingletonClass(expr, body));
                 Ok(Var::Nil)
             }
@@ -1573,7 +1669,7 @@ impl Proc {
                 }
 
                 // TODO: deal with params
-                let body = Proc::new_with_body(body, scope.symbols())?;
+                let body = IRProc::new_with_body(name, body, scope.symbols())?;
                 items.push(IROp::DefSingletonMethod(expr, name, body));
                 Ok(Var::Nil)
             }
@@ -1624,7 +1720,7 @@ impl Proc {
                 if let Some(args) = args {
                     Self::expand_args(args, scope, items)?;
                 }
-                items.push(IROp::Call(expr, Some(expr), scope.symbol("[]")));
+                items.push(IROp::Call(expr, expr, scope.symbol("[]")));
                 items.push(IROp::Assign(expr, rhs));
                 Ok(rhs)
             }
@@ -1636,11 +1732,11 @@ impl Proc {
                     | Ident::MethodOnly(name)
                     | Ident::AssignmentMethod(name) => {
                         let name = scope.symbol(name);
-                        items.push(IROp::Call(expr, Some(expr), name));
+                        items.push(IROp::Call(expr, expr, name));
                     }
                     Ident::Keyword(name) => {
                         let name = scope.symbol(name);
-                        items.push(IROp::Call(expr, Some(expr), name));
+                        items.push(IROp::Call(expr, expr, name));
                     }
                     ident => return Err(IRError::InvalidMember(ident.clone())),
                 }
@@ -1652,7 +1748,7 @@ impl Proc {
                     let name = scope.symbol(name);
                     let lhs = scope.next_var();
                     items.push(IROp::LoadRoot(lhs));
-                    items.push(IROp::LoadConst(lhs, Some(lhs), name));
+                    items.push(IROp::LoadConst(lhs, lhs, name));
                     Ok(rhs)
                 }
                 ident => return Err(IRError::InvalidConstPath(ident.clone())),
@@ -1756,7 +1852,7 @@ impl Proc {
                     Ok(var)
                 } else {
                     let out = scope.next_var();
-                    items.push(IROp::Call(out, None, name));
+                    items.push(IROp::Call(out, Var::SelfRef, name));
                     Ok(out)
                 }
             }
@@ -1766,7 +1862,7 @@ impl Proc {
                     Ok(var)
                 } else {
                     let out = scope.next_var();
-                    items.push(IROp::Call(out, None, name));
+                    items.push(IROp::Call(out, Var::SelfRef, name));
                     Ok(out)
                 }
             }
@@ -1779,7 +1875,7 @@ impl Proc {
             Ident::Const(name) => {
                 let name = scope.symbol(name);
                 let out = scope.next_var();
-                items.push(IROp::LoadConst(out, None, name));
+                items.push(IROp::LoadConst(out, Var::SelfRef, name));
                 Ok(out)
             }
             Ident::Class(name) => {
@@ -1797,7 +1893,7 @@ impl Proc {
             Ident::MethodOnly(name) | Ident::AssignmentMethod(name) => {
                 let name = scope.symbol(name);
                 let out = scope.next_var();
-                items.push(IROp::Call(out, None, name));
+                items.push(IROp::Call(out, Var::SelfRef, name));
                 Ok(out)
             }
         }
@@ -1919,18 +2015,94 @@ impl Proc {
         }
     }
 
+    fn number_to_float(positive: bool, value: &NumericValue) -> Option<f64> {
+        match value {
+            NumericValue::Float {
+                decimal: (integer_part, decimal_part),
+                exp_positive,
+                exp,
+            } => {
+                let mut n = 0.;
+
+                for c in integer_part.chars() {
+                    n *= 10.;
+                    match c {
+                        '0' => (),
+                        '1' => n += 1.,
+                        '2' => n += 2.,
+                        '3' => n += 3.,
+                        '4' => n += 4.,
+                        '5' => n += 5.,
+                        '6' => n += 6.,
+                        '7' => n += 7.,
+                        '8' => n += 8.,
+                        '9' => n += 9.,
+                        _ => return None,
+                    }
+                }
+
+                for (i, c) in decimal_part.chars().enumerate() {
+                    let scale = 10.0_f64.powf(-1. - (i as f64));
+                    match c {
+                        '0' => (),
+                        '1' => n += 1. * scale,
+                        '2' => n += 2. * scale,
+                        '3' => n += 3. * scale,
+                        '4' => n += 4. * scale,
+                        '5' => n += 5. * scale,
+                        '6' => n += 6. * scale,
+                        '7' => n += 7. * scale,
+                        '8' => n += 8. * scale,
+                        '9' => n += 9. * scale,
+                        _ => return None,
+                    }
+                }
+
+                let mut e = 0.;
+                for c in exp.chars() {
+                    e *= 10.;
+                    match c {
+                        '0' => (),
+                        '1' => e += 1.,
+                        '2' => e += 2.,
+                        '3' => e += 3.,
+                        '4' => e += 4.,
+                        '5' => e += 5.,
+                        '6' => e += 6.,
+                        '7' => e += 7.,
+                        '8' => e += 8.,
+                        '9' => e += 9.,
+                        _ => return None,
+                    }
+                }
+                e = 10.0_f64.powf(e);
+                if !exp_positive {
+                    e *= -1.;
+                }
+
+                n *= e;
+
+                if !positive {
+                    n *= -1.;
+                }
+
+                Some(n)
+            }
+            _ => None,
+        }
+    }
+
     pub fn fmt_with_symbols(&self, symbols: &Symbols) -> String {
         use std::fmt::Write;
 
         let mut f = String::from("Proc {\n");
         for (k, v) in &self.variables {
-            write!(
-                f,
-                "    (local variable) {} -> {}\n",
-                k,
-                symbols.symbol_name(*v).unwrap_or("?")
-            )
-            .unwrap();
+            let name = symbols.symbol_name(*v).unwrap_or("?");
+            if self.captured_vars.contains(k) {
+                write!(f, "    (local variable) {} -> {} (captured)\n", k, name).unwrap();
+            } else {
+                write!(f, "    (local variable) {} -> {}\n", k, name).unwrap();
+            }
         }
         write!(f, "    may be captured: {}\n", self.may_be_captured).unwrap();
 

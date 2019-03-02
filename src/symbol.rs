@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub struct Symbol(usize);
 
 /// A symbol table.
+#[derive(Debug)]
 pub struct Symbols {
     table: HashMap<String, Symbol>,
 }

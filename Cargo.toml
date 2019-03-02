@@ -5,7 +5,9 @@ authors = ["cpsdqs <cpsdqs@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-sapphire-parser = { path = "parser" }
 fnv = "1.0"
+parking_lot = "0.7"
+sapphire-parser = { path = "parser" }
+smallvec = "0.6"
 
 [workspace]

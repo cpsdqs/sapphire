@@ -1,8 +1,11 @@
+use crate::proc::Proc;
+use crate::symbol::Symbols;
 use sapphire_parser::lex::{Item, Lexer};
 use sapphire_parser::parse::{parse, ParseError};
 use std::fmt;
 use std::pin::Pin;
 
+mod byte;
 mod ir;
 
 /// An owned version of [`ParseError`].
@@ -37,8 +40,33 @@ impl fmt::Display for OwnedParseError {
     }
 }
 
+/// A compile error.
+#[derive(Debug)]
+pub enum CompileError {
+    Parse(OwnedParseError),
+    IR(ir::IRError),
+}
+
+impl CompileError {
+    fn fmt_ansi(&self) -> String {
+        match self {
+            CompileError::Parse(err) => err.fmt_ansi(),
+            CompileError::IR(err) => format!("{}", err),
+        }
+    }
+}
+
+impl fmt::Display for CompileError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CompileError::Parse(err) => write!(f, "{}", err),
+            CompileError::IR(err) => write!(f, "{}", err),
+        }
+    }
+}
+
 /// Compiles Ruby source code.
-pub fn compile(input: String) -> Result<(), OwnedParseError> {
+pub fn compile(name: &str, input: String, symbols: &mut Symbols) -> Result<Proc, CompileError> {
     let input = Pin::new(Box::new(input));
     let input_ref = unsafe { &*(&*input as *const String) };
 
@@ -52,37 +80,25 @@ pub fn compile(input: String) -> Result<(), OwnedParseError> {
     let ast = match parse(&tokens_ref) {
         Ok(ast) => ast,
         Err(err) => {
-            return Err(OwnedParseError {
+            return Err(CompileError::Parse(OwnedParseError {
                 input,
                 _tokens: tokens,
                 error: err,
-            });
+            }));
         }
     };
 
-    let mut symbols = crate::symbol::Symbols::new();
-    let proc = ir::Proc::new(&ast, &mut symbols);
-    unimplemented!(
-        "further compilation of:\n{}\n---\n{}\n",
-        input,
-        proc.unwrap().fmt_with_symbols(&symbols)
-    )
+    let name = symbols.symbol(name);
+    let proc = ir::IRProc::new(name, &ast, symbols).map_err(CompileError::IR)?;
+    Ok(proc.into())
 }
 
 #[test]
-fn fhjdskahfjksdla() {
-    match compile(
-        "
-def horse
-    a = 1
-    for i in 0...10
-        p i + a
-    end
-end
-"
-        .into(),
-    ) {
-        Ok(_) => (),
-        Err(e) => panic!("\n{}", e.fmt_ansi()),
+fn fdshajkfhdsajk() {
+    let mut symbols = Symbols::new();
+    let s = "puts \"hello world\"";
+    match compile("main", String::from(s), &mut symbols) {
+        Ok(res) => panic!("\n{}\n-> {:?}, {:?}", s, res, symbols),
+        Err(err) => panic!("\n{}", err.fmt_ansi()),
     }
 }
