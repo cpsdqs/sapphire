@@ -1,6 +1,6 @@
 use std::any::Any;
 
-pub trait Object {
+pub trait Object: Send {
     /// Helper method for downcasting.
     fn as_any(&self) -> &Any;
 

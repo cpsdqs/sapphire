@@ -646,14 +646,14 @@ sapphire_parser_gen::parser! {
     separator: (&Token) = { t: token!(PSemicolon, Newlines,) => (t) }
 
     // 11 Expressions
-    expression: Expression = { keyword_logical_expression }
+    // expression: Expression = { keyword_logical_expression }
 
     // 11.2 Logical expressions
     // 11.2.2 Keyword logical expressions
-    keyword_logical_expression: Expression = {
-        keyword_not_expression,
+    expression: Expression = {
         keyword_and_expression,
         keyword_or_expression,
+        keyword_not_expression,
     }
 
     // 11.2.3 Logical NOT expressions
@@ -713,7 +713,8 @@ sapphire_parser_gen::parser! {
                 block: Some(Box::new(Expression::Block(b))),
             }
         }),
-        i: method_identifier a: argument_with_parentheses wss b: opt!(block) => {
+        i: method_identifier a: argument_with_parentheses
+            b: opt!(do_parse!(wss >> b: block >> (b))) => {
             let mut args = a;
             if let Some(b) = b {
                 args.block = Some(Box::new(Expression::Block(b)));
@@ -725,15 +726,13 @@ sapphire_parser_gen::parser! {
                 args,
             }
         },
-        e: primary_expression ws token!(PDot) wss i: opt!(method_name)
-            a: opt!(argument_with_parentheses) wss b: opt!(block) => {
+        e: primary_expression ws token!(PDot) wss i: method_name
+            a: opt!(argument_with_parentheses)
+            b: opt!(do_parse!(wss >> b: block >> (b))) => {
             let mut args = a.unwrap_or_else(|| Arguments::default());
             if let Some(b) = b {
                 args.block = Some(Box::new(Expression::Block(b)));
             }
-
-            // Ruby 1.9: .(·) proc call syntax
-            let i = i.unwrap_or(Ident::Local("call".into()));
 
             Expression::Call {
                 member: Some(Box::new(e)),
@@ -741,8 +740,51 @@ sapphire_parser_gen::parser! {
                 args,
             }
         },
+        e: primary_expression a: argument_with_parentheses
+            b: opt!(do_parse!(wss >> b: block >> (b))) => [ i => {
+            let call = match e {
+                Expression::Call {
+                    member,
+                    name,
+                    args,
+                } => if args.is_empty() {
+                    Some((member, name))
+                } else {
+                    None
+                },
+                _ => None,
+            };
+            if let Some((member, name)) = call {
+                let mut args = a;
+                if let Some(b) = b {
+                    args.block = Some(Box::new(Expression::Block(b)));
+                }
+
+                Ok((i, Expression::Call {
+                    member,
+                    name,
+                    args,
+                }))
+            } else {
+                Err(ParseError::Unexpected(i.without_state(), Expected::PrimaryMethodInvocation))
+            }
+        }],
+        // Ruby 1.9: .(·) proc call syntax
+        e: primary_expression ws token!(PDot) wss a: argument_with_parentheses
+            b: opt!(do_parse!(wss >> b: block >> (b))) => {
+            let mut args = a;
+            if let Some(b) = b {
+                args.block = Some(Box::new(Expression::Block(b)));
+            }
+
+            Expression::Call {
+                member: Some(Box::new(e)),
+                name: Ident::Local("call".into()),
+                args,
+            }
+        },
         e: primary_expression ws token!(PDblColon) wss i: method_name a: argument_with_parentheses
-            wss b: opt!(block) => {
+            b: opt!(do_parse!(wss >> b: block >> (b))) => {
             let mut args = a;
             if let Some(b) = b {
                 args.block = Some(Box::new(Expression::Block(b)));
@@ -753,8 +795,8 @@ sapphire_parser_gen::parser! {
                 args,
             }
         },
-        e: primary_expression ws token!(PDblColon) wss i: method_name_except_constant wss
-            b: opt!(block) => (Expression::Call {
+        e: primary_expression ws token!(PDblColon) wss i: method_name_except_constant
+            b: opt!(do_parse!(wss >> b: block >> (b))) => (Expression::Call {
             member: Some(Box::new(e)),
             name: i,
             args: Arguments {
@@ -770,6 +812,13 @@ sapphire_parser_gen::parser! {
     method_name: Ident = {
         i: method_identifier => (i.into()),
         i: operator_method_name => (i.clone().into()),
+        token!(PLBracket) token!(PRBracket) o: opt!(token!(OAssign)) => {
+            if o.is_some() {
+                Ident::Keyword("[]=")
+            } else {
+                Ident::Keyword("[]")
+            }
+        },
         i: keyword => (i.clone().into()),
     }
     indexing_method_invocation: Expression = {
@@ -1598,7 +1647,8 @@ sapphire_parser_gen::parser! {
     }
     do_clause: StatementList = {
         alt!(
-            do_parse!(separator >> ()), do_parse!(token!(Kdo) >> ()),
+            do_parse!(separator >> ()),
+            do_parse!(token!(Kdo) >> opt!(separator) >> ()),
             err: DoClause
         ) c: compound_statement => (c)
     }

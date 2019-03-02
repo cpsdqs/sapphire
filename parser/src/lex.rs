@@ -367,7 +367,10 @@ pub enum Quoted<'input> {
     Interpolated(Vec<Spanned<Token<'input>, usize, Err<&'input str>>>),
 }
 
-named!(peek_nalpha<&str, ()>, alt_complete!(not!(alphanumeric1) | do_parse!(eof!() >> ())));
+named!(peek_nident<&str, ()>, alt_complete!(
+    do_parse!(not!(alphanumeric1) >> not!(char!('_')) >> ())
+    | do_parse!(eof!() >> ())
+));
 
 named!(keyword<&str, Token>, do_parse!(token: alt_complete!(
     do_parse!(tag!("__LINE__") >> (Token::K__LINE__))
@@ -411,7 +414,7 @@ named!(keyword<&str, Token>, do_parse!(token: alt_complete!(
     | do_parse!(tag!("when") >> (Token::Kwhen))
     | do_parse!(tag!("while") >> (Token::Kwhile))
     | do_parse!(tag!("yield") >> (Token::Kyield))
-) >> peek_nalpha >> (token)));
+) >> peek_nident >> (token)));
 
 named!(lowercase_character<&str, char>, one_of!("abcdefghijklmnopqrstuvwxyz"));
 named!(uppercase_character<&str, char>, one_of!("ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
@@ -509,7 +512,12 @@ named!(operator<&str, Token>, alt_complete!(
     | do_parse!(tag!("**=") >> (Token::OAssignPow))
     | do_parse!(tag!("&&") >> (Token::OAnd))
     | do_parse!(tag!("||") >> (Token::OOr))
-    | do_parse!(tag!("^") >> (Token::OBitXor))
+    | operator_method_name
+    | do_parse!(tag!("=") >> (Token::OAssign))
+));
+
+named!(operator_method_name<&str, Token>, alt_complete!(
+    do_parse!(tag!("^") >> (Token::OBitXor))
     | do_parse!(tag!("&") >> (Token::OBitAnd))
     | do_parse!(tag!("|") >> (Token::OBitOr))
     | do_parse!(tag!("<=>") >> (Token::OCmp))
@@ -529,9 +537,10 @@ named!(operator<&str, Token>, alt_complete!(
     | do_parse!(tag!("/") >> (Token::ODiv))
     | do_parse!(tag!("%") >> (Token::ORem))
     | do_parse!(tag!("~") >> (Token::OBitInv))
-    | do_parse!(tag!("=") >> (Token::OAssign))
-    // | do_parse!(tag!("[]=") >> (Token::OAssignIndex))
-    // | do_parse!(tag!("[]") >> (Token::OIndex))
+    | do_parse!(tag!("+@") >> (Token::OUPlus))
+    | do_parse!(tag!("-@") >> (Token::OUMinus))
+    | do_parse!(tag!("[]=") >> (Token::OAssignIndex))
+    | do_parse!(tag!("[]") >> (Token::OIndex))
 ));
 
 named!(numeric_literal<&str, Token>, alt_complete!(
@@ -671,8 +680,24 @@ named!(double_quoted_string<&str, Token>, do_parse!(
     tag!("\"") >>
     (Token::LDoubleStr(contents))
 ));
+
+named!(symbol_literal<&str, Token>, do_parse!(
+    tag!(":") >>
+    contents: recognize!(alt_complete!(
+        instance_variable_identifier
+        | global_variable_identifier
+        | class_variable_identifier
+        | constant_identifier
+        | local_variable_identifier
+        | method_only_identifier
+        | assignment_like_method_identifier
+        | operator_method_name
+        | keyword
+    )) >>
+    (Token::LSymbol(contents))
+));
 // TODO: literals
-named!(literal<&str, Token>, alt_complete!(numeric_literal | string_literal));
+named!(literal<&str, Token>, alt_complete!(numeric_literal | string_literal | symbol_literal));
 
 fn lex_whitespace(input: &str) -> IResult<&str, Token> {
     let mut i = input;

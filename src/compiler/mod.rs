@@ -48,7 +48,7 @@ pub enum CompileError {
 }
 
 impl CompileError {
-    fn fmt_ansi(&self) -> String {
+    pub fn fmt_ansi(&self) -> String {
         match self {
             CompileError::Parse(err) => err.fmt_ansi(),
             CompileError::IR(err) => format!("{}", err),
