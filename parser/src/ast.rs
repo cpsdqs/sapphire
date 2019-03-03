@@ -522,10 +522,6 @@ pub enum Expression {
     AssignRescue(Box<LeftHandSide>, Box<Expression>, Box<Expression>),
 }
 
-pub(crate) fn bin_op_expr(a: Expression, op: Token, b: Expression) -> Expression {
-    Expression::BinOp(Box::new(a), op.into(), Box::new(b))
-}
-
 /// Left hand side in a variable assignment.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LeftHandSide {
