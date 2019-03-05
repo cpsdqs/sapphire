@@ -1,6 +1,7 @@
 //! Ruby VM.
 
 pub mod compiler;
+pub mod context;
 pub mod heap;
 pub mod object;
 pub mod proc;

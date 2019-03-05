@@ -9,6 +9,8 @@ impl Into<Proc> for IRProc {
         let mut registers = FnvHashMap::default();
         let mut labels = FnvHashMap::default();
 
+        // FIXME: labels do not have byte offsets
+
         let mut register_count = RESERVED_REGISTERS;
         let mut i = 0;
         for op in &mut self.items {

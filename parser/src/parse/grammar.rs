@@ -729,6 +729,14 @@ sapphire_parser_gen::parser! {
             }
         },
         method_definition,
+        e: expression ws token!(PLBracket) wss a: opt!(indexing_argument_list) wss
+            token!(PRBracket) => {
+            Expression::Index(Box::new(e), a.unwrap_or_default())
+        },
+        i: variable ws token!(OAssign) wss e: expression => {
+            Expression::AssignVar(i, Box::new(e))
+        },
+        i: variable => (Expression::Variable(i)),
         not!(token!(Kend); err: Expression) i: method_name
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {
@@ -747,14 +755,6 @@ sapphire_parser_gen::parser! {
                 }
             }
         },
-        e: expression ws token!(PLBracket) wss a: opt!(indexing_argument_list) wss
-            token!(PRBracket) => {
-            Expression::Index(Box::new(e), a.unwrap_or_default())
-        },
-        i: variable ws token!(OAssign) wss e: expression => {
-            Expression::AssignVar(i, Box::new(e))
-        },
-        i: variable => (Expression::Variable(i)),
         token!(PDblColon) wss i: token!(IConstant) ws token!(OAssign) wss e: expression => {
             Expression::AssignConst {
                 member: None,

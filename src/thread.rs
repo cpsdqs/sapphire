@@ -1,4 +1,6 @@
-use crate::proc::{AddressingMode, Op, Proc};
+use crate::context::Context;
+use crate::proc::{AddressingMode, Op, Proc, Static, VOID};
+use crate::symbol::Symbol;
 use crate::value::Value;
 use smallvec::{Array, SmallVec};
 use std::mem;
@@ -19,6 +21,7 @@ impl Frame {
 }
 
 pub struct Thread {
+    context: Arc<Context>,
     frames: Stack<[Frame; 1024]>,
     pcs: Stack<[usize; 1024]>,
     rescues: Stack<[usize; 1024]>,
@@ -28,12 +31,14 @@ pub struct Thread {
 pub enum ThreadError {
     StackOverflow,
     InvalidOperation,
+    InvalidStatic,
     UnexpectedEnd,
 }
 
 impl Thread {
-    pub fn new_empty() -> Thread {
+    pub fn new_empty(context: Arc<Context>) -> Thread {
         Thread {
+            context,
             frames: Stack::new(),
             pcs: Stack::new(),
             rescues: Stack::new(),
@@ -73,6 +78,18 @@ impl Thread {
                 }
                 _ => Err(ThreadError::UnexpectedEnd),
             },
+        }
+    }
+
+    fn read_static(&mut self) -> Result<&Static, ThreadError> {
+        let index = self.read_addr()?;
+        Ok(&self.frames.top().unwrap().proc.statics[index])
+    }
+
+    fn read_symbol(&mut self) -> Result<Symbol, ThreadError> {
+        match self.read_static()? {
+            Static::Sym(sym) => Ok(*sym),
+            _ => Err(ThreadError::InvalidStatic),
         }
     }
 
@@ -136,9 +153,12 @@ impl Thread {
         Ok(Some(()))
     }
 
+    // TODO: deal with parent vars
     #[inline]
     fn op_load_root(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        self.frames.top_mut().unwrap().register[out] = Value::Ref(self.context.root().clone());
+        Ok(())
     }
     #[inline]
     fn op_load_true(&mut self) -> Result<(), ThreadError> {
@@ -154,7 +174,13 @@ impl Thread {
     }
     #[inline]
     fn op_load_global(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let name = self.read_symbol()?;
+        match self.context.globals().get().get(&name) {
+            Some(value) => self.frames.top_mut().unwrap().register[out] = value.clone(),
+            None => self.frames.top_mut().unwrap().register[out] = Value::Nil,
+        }
+        Ok(())
     }
     #[inline]
     fn op_load_const(&mut self) -> Result<(), ThreadError> {
@@ -170,27 +196,69 @@ impl Thread {
     }
     #[inline]
     fn op_load_string(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        match self.read_static()? {
+            Static::Str(string) => {
+                self.frames.top_mut().unwrap().register[out] = Value::String(string.clone())
+            }
+            _ => return Err(ThreadError::InvalidStatic),
+        }
+        Ok(())
     }
     #[inline]
     fn op_append_string(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let recv = self.read_addr()?;
+        let append = self.read_addr()?;
+        let register = &mut self.frames.top_mut().unwrap().register;
+        let append = match &register[append] {
+            Value::String(append) => append.clone(),
+            _ => unimplemented!("stringify"),
+        };
+        match &mut register[recv] {
+            Value::String(recv) => recv.push_str(&append),
+            _ => unimplemented!("append string to non-string"),
+        }
+        Ok(())
     }
     #[inline]
     fn op_load_symbol(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let sym = self.read_symbol()?;
+        self.frames.top_mut().unwrap().register[out] = Value::Symbol(sym);
+        Ok(())
     }
     #[inline]
     fn op_load_i64(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        match self.read_static()? {
+            Static::Int(value) => {
+                self.frames.top_mut().unwrap().register[out] = Value::Fixnum(*value);
+                Ok(())
+            }
+            _ => Err(ThreadError::InvalidStatic)
+        }
     }
     #[inline]
     fn op_load_float(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        match self.read_static()? {
+            Static::Float(value) => {
+                self.frames.top_mut().unwrap().register[out] = Value::Float(*value);
+                Ok(())
+            }
+            _ => Err(ThreadError::InvalidStatic)
+        }
     }
     #[inline]
     fn op_load_proc(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        match self.read_static()? {
+            Static::Proc(value) => {
+                self.frames.top_mut().unwrap().register[out] = Value::Proc(Arc::clone(value));
+                Ok(())
+            }
+            _ => Err(ThreadError::InvalidStatic)
+        }
     }
     #[inline]
     fn op_arg(&mut self) -> Result<(), ThreadError> {
@@ -222,27 +290,50 @@ impl Thread {
     }
     #[inline]
     fn op_jump(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        self.pc = self.read_addr()?;
+        Ok(())
     }
     #[inline]
     fn op_jump_if(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let cond = self.read_addr()?;
+        let jump = self.read_addr()?;
+        if self.frames.top().unwrap().register[cond].is_truthy() {
+            self.pc = jump;
+        }
+        Ok(())
     }
     #[inline]
     fn op_jump_if_not(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let cond = self.read_addr()?;
+        let jump = self.read_addr()?;
+        if !self.frames.top().unwrap().register[cond].is_truthy() {
+            self.pc = jump;
+        }
+        Ok(())
     }
     #[inline]
     fn op_return(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let value = self.read_addr()?;
+        let value = self.frames.top().unwrap().register[value].clone();
+        self.pop_frame();
+        self.frames.top_mut().unwrap().register[VOID] = value;
+        Ok(())
     }
     #[inline]
     fn op_assign(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let recv = self.read_addr()?;
+        let value = self.read_addr()?;
+        let register = &mut self.frames.top_mut().unwrap().register;
+        register[recv] = register[value].clone();
+        Ok(())
     }
     #[inline]
     fn op_assign_global(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let name = self.read_symbol()?;
+        let value = self.read_addr()?;
+        let value = self.frames.top().unwrap().register[value].clone();
+        self.context.globals().get().insert(name, value);
+        Ok(())
     }
     #[inline]
     fn op_assign_const(&mut self) -> Result<(), ThreadError> {

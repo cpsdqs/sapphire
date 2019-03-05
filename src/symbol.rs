@@ -1,8 +1,28 @@
+use crate::context::Context;
+use crate::heap::Ref;
+use crate::object::{Object, ObjectType};
+use crate::value::Value;
+use std::any::Any;
 use std::collections::HashMap;
 
 /// A symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Symbol(usize);
+
+impl Object for Symbol {
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
+    }
+    fn object_type(&self) -> ObjectType {
+        ObjectType::Object
+    }
+    fn class(&self, context: &Context) -> Ref<Object> {
+        context.symbol_class().clone()
+    }
+}
 
 /// A symbol table.
 #[derive(Debug)]
