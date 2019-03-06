@@ -22,6 +22,12 @@ impl Object for Symbol {
     fn class(&self, context: &Context) -> Ref<Object> {
         context.symbol_class().clone()
     }
+    fn get_ivar(&self, _: Symbol) -> Option<Value> {
+        None
+    }
+    fn set_ivar(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
+        Err(())
+    }
 }
 
 /// A symbol table.

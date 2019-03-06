@@ -1,4 +1,6 @@
 use crate::context::Context;
+use crate::heap::Ref;
+use crate::object::Object;
 use crate::proc::{AddressingMode, Op, Proc, Static, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
@@ -9,13 +11,15 @@ use std::sync::Arc;
 struct Frame {
     proc: Arc<Proc>,
     register: SmallVec<[Value; 256]>,
+    current_self: Value,
 }
 
 impl Frame {
-    fn new(proc: Arc<Proc>) -> Frame {
+    fn new(proc: Arc<Proc>, current_self: Value) -> Frame {
         Frame {
             register: SmallVec::with_capacity(proc.registers),
             proc,
+            current_self,
         }
     }
 }
@@ -25,6 +29,7 @@ pub struct Thread {
     frames: Stack<[Frame; 1024]>,
     pcs: Stack<[usize; 1024]>,
     rescues: Stack<[usize; 1024]>,
+    const_nodes: Stack<[Ref<Object>; 1024]>,
     pc: usize,
 }
 
@@ -42,12 +47,13 @@ impl Thread {
             frames: Stack::new(),
             pcs: Stack::new(),
             rescues: Stack::new(),
+            const_nodes: Stack::new(),
             pc: 0,
         }
     }
 
-    fn push_frame(&mut self, proc: Arc<Proc>) -> Result<(), ThreadError> {
-        self.frames.push(Frame::new(proc))?;
+    fn push_frame(&mut self, proc: Arc<Proc>, new_self: Value) -> Result<(), ThreadError> {
+        self.frames.push(Frame::new(proc, new_self))?;
         self.pcs.push(self.pc)?;
         self.pc = 0;
         Ok(())
@@ -184,15 +190,43 @@ impl Thread {
     }
     #[inline]
     fn op_load_const(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let name = self.read_symbol()?;
+        match self
+            .const_nodes
+            .top()
+            .unwrap()
+            .get()
+            .as_const_node()
+            .expect("Item in const node stack is not a const node")
+            .get_const(name)
+        {
+            Some(value) => self.frames.top_mut().unwrap().register[out] = value,
+            None => self.frames.top_mut().unwrap().register[out] = Value::Nil,
+        }
+        Ok(())
     }
     #[inline]
     fn op_load_class_var(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let name = self.read_symbol()?;
+        let frame = self.frames.top_mut().unwrap();
+        match frame.current_self.class(&self.context).get().get_ivar(name) {
+            Some(value) => frame.register[out] = value,
+            None => frame.register[out] = Value::Nil,
+        }
+        Ok(())
     }
     #[inline]
     fn op_load_ivar(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let name = self.read_symbol()?;
+        let frame = self.frames.top_mut().unwrap();
+        match frame.current_self.get_ivar(name) {
+            Some(value) => frame.register[out] = value,
+            None => frame.register[out] = Value::Nil,
+        }
+        Ok(())
     }
     #[inline]
     fn op_load_string(&mut self) -> Result<(), ThreadError> {
@@ -235,7 +269,7 @@ impl Thread {
                 self.frames.top_mut().unwrap().register[out] = Value::Fixnum(*value);
                 Ok(())
             }
-            _ => Err(ThreadError::InvalidStatic)
+            _ => Err(ThreadError::InvalidStatic),
         }
     }
     #[inline]
@@ -246,7 +280,7 @@ impl Thread {
                 self.frames.top_mut().unwrap().register[out] = Value::Float(*value);
                 Ok(())
             }
-            _ => Err(ThreadError::InvalidStatic)
+            _ => Err(ThreadError::InvalidStatic),
         }
     }
     #[inline]
@@ -257,7 +291,7 @@ impl Thread {
                 self.frames.top_mut().unwrap().register[out] = Value::Proc(Arc::clone(value));
                 Ok(())
             }
-            _ => Err(ThreadError::InvalidStatic)
+            _ => Err(ThreadError::InvalidStatic),
         }
     }
     #[inline]
@@ -286,7 +320,11 @@ impl Thread {
     }
     #[inline]
     fn op_not(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let value = self.read_addr()?;
+        let register = &mut self.frames.top_mut().unwrap().register;
+        register[out] = Value::Bool(register[value].is_truthy());
+        Ok(())
     }
     #[inline]
     fn op_jump(&mut self) -> Result<(), ThreadError> {

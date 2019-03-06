@@ -26,11 +26,36 @@ pub trait Object: Send {
     /// Helper method for downcasting.
     fn as_any_mut(&mut self) -> &mut Any;
 
+    fn as_const_node(&self) -> Option<&ConstNode> {
+        None
+    }
+    fn as_const_node_mut(&mut self) -> Option<&mut ConstNode> {
+        None
+    }
+    fn as_class(&self) -> Option<&Class> {
+        None
+    }
+    fn as_class_mut(&mut self) -> Option<&mut Class> {
+        None
+    }
+    fn as_module(&self) -> Option<&Module> {
+        None
+    }
+    fn as_module_mut(&mut self) -> Option<&mut Module> {
+        None
+    }
+
     /// Returns the object type.
     fn object_type(&self) -> ObjectType;
 
     /// Returns the object’s class.
     fn class(&self, context: &Context) -> Ref<Object>;
+
+    /// Returns an instance variable.
+    fn get_ivar(&self, name: Symbol) -> Option<Value>;
+
+    /// Sets an instance variable.
+    fn set_ivar(&mut self, name: Symbol, value: Value) -> Result<(), ()>;
 }
 
 /// A node in the “const tree.”
