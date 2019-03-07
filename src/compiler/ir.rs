@@ -942,8 +942,7 @@ impl IRProc {
             }
         }
 
-
-        // also remove useless jumps (which would probably cause the VM to loop endlessly, actually)
+        // also remove useless jumps
         let mut i = 0;
         while i < self.items.len() {
             match self.items[i] {

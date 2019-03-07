@@ -252,15 +252,64 @@ impl<'input> ParseError<'input> {
         }
     }
 
-    /// Returns the error from the most successful parser.
-    fn most_successful(&self) -> &ParseError<'input> {
+    fn expected(&self) -> &Expected {
         match self {
-            // TODO: use alt-merged if multiple errors have the same position
-            ParseError::Alt(err, sub_errors) => sub_errors
-                .iter()
-                .max_by_key(|err| err.cursor().pos())
-                .unwrap_or(err),
-            err => err,
+            ParseError::Unexpected(_, e) => e,
+            ParseError::Alt(e, _) => e.expected(),
+        }
+    }
+
+    /// Returns the error from the most successful parser.
+    fn most_successful(&self) -> ParseError<'input> {
+        match self {
+            ParseError::Alt(_, sub_errors) => {
+                let mut max_pos = 0;
+                let mut max_indices = Vec::new();
+
+                for (i, err) in sub_errors.iter().enumerate() {
+                    let pos = err.cursor().pos();
+                    if pos > max_pos {
+                        max_pos = pos;
+                        max_indices.clear();
+                    }
+                    if pos == max_pos {
+                        max_indices.push(i);
+                    }
+                }
+
+                if max_indices.len() == 1 {
+                    sub_errors[max_indices[0]].clone()
+                } else {
+                    let mut expected = Vec::new();
+
+                    fn push_expected(out: &mut Vec<Expected>, e: &Expected) {
+                        match e {
+                            Expected::OneOf(e) => {
+                                for sub_e in e {
+                                    push_expected(out, sub_e);
+                                }
+                            }
+                            Expected::OneOfToken(tokens) => {
+                                for token in tokens.iter() {
+                                    push_expected(out, &Expected::Token(*token));
+                                }
+                            }
+                            e => {
+                                if !out.contains(e) {
+                                    out.push(e.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    for err in sub_errors {
+                        push_expected(&mut expected, err.expected());
+                    }
+                    let expected = Expected::OneOf(expected);
+                    ParseError::Unexpected(sub_errors[0].cursor(), expected)
+                }
+            }
+            err => err.clone(),
         }
     }
 
@@ -269,16 +318,7 @@ impl<'input> ParseError<'input> {
     /// Without this, parse errors got ridiculously large and were practically useless walls of
     /// text.
     pub(crate) fn reduce(self) -> ParseError<'input> {
-        match self {
-            ParseError::Alt(err, sub_errors) => {
-                // pick the error from the sub-parser that was most successful (got the furthest)
-                sub_errors
-                    .into_iter()
-                    .max_by_key(|err| err.cursor().pos())
-                    .unwrap_or(*err)
-            }
-            err => err,
-        }
+        self.most_successful()
     }
 
     /// Returns the error line number, line, and inline range of the error in characters.
@@ -429,7 +469,7 @@ impl<'input> ParseError<'input> {
             ParseError::Alt(top, _) => {
                 let (top_ln, top_line, (top_start, _)) = top.error_line(src);
                 let err = self.most_successful();
-                if err == &**top {
+                if err == **top {
                     return top.fmt_with_src(src, ansi);
                 }
                 let (ln, line, (start, end)) = err.error_line(src);
