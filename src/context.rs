@@ -35,6 +35,7 @@ macro_rules! impl_getters {
 
 impl_getters! {
     globals: Ref<FnvHashMap<Symbol, Value>>,
+    symbols: Symbols,
     root: Ref<Object>,
     nil_class: Ref<Object>,
     bool_class: Ref<Object>,

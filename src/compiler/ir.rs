@@ -9,9 +9,6 @@ use std::{fmt, iter, mem};
 /// A register variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Var {
-    /// A local variable from the parent (e.g. in a block), with the depth of the parent
-    /// (usually 1).
-    Parent(usize, usize),
     /// A local variable in the current proc.
     Local(usize),
     /// A special white hole variable that will always contain nil.
@@ -22,12 +19,20 @@ pub enum Var {
     SelfRef,
 }
 
-impl Var {
-    /// Returns true if the variable is from the parent proc.
-    fn is_from_parent(&self) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum MaybeLocalVar {
+    /// A local variable from the parent (e.g. in a block), with the depth of the parent
+    /// (usually 1).
+    Parent(usize, usize),
+    /// A local variable.
+    Local(Var),
+}
+
+impl MaybeLocalVar {
+    fn unwrap(self) -> Var {
         match self {
-            Var::Parent(_, _) => true,
-            _ => false,
+            MaybeLocalVar::Local(var) => var,
+            _ => panic!("error unwrapping MaybeLocalVar (expected local, got parent var)"),
         }
     }
 }
@@ -35,7 +40,6 @@ impl Var {
 impl fmt::Display for Var {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Var::Parent(i, depth) => write!(f, "{}var_{}", "^".repeat(*depth), i),
             Var::Local(i) => write!(f, "var_{}", i),
             Var::Nil => write!(f, "nil"),
             Var::Void => write!(f, "void"),
@@ -74,6 +78,8 @@ struct Scope<'a> {
     /// If true, no variables will be created in the current scope. They will instead be created
     /// in the parent scope.
     no_local_vars: bool,
+    /// The variable used for `yield`.
+    block_var: Option<Var>,
 }
 
 impl<'a> Scope<'a> {
@@ -95,6 +101,7 @@ impl<'a> Scope<'a> {
             may_be_captured,
             var_counter: 0,
             no_local_vars: false,
+            block_var: None,
         }
     }
 
@@ -133,8 +140,24 @@ impl<'a> Scope<'a> {
         Label(self.var_counter)
     }
 
+    /// Returns the block parameter variable.
+    fn block_var(&mut self) -> Var {
+        match self.block_var {
+            Some(var) => var,
+            None => {
+                if self.no_local_vars {
+                    self.parent.as_mut().unwrap().block_var()
+                } else {
+                    let var = self.next_var();
+                    self.block_var = Some(var);
+                    var
+                }
+            }
+        }
+    }
+
     /// Defines a local variable.
-    fn define_local_var(&mut self, name: Symbol) -> Var {
+    fn define_local_var(&mut self, name: Symbol) -> MaybeLocalVar {
         if self.no_local_vars {
             self.parent.as_mut().unwrap().define_local_var(name);
             return self.parent.as_mut().unwrap().capture_var(name).unwrap();
@@ -145,29 +168,29 @@ impl<'a> Scope<'a> {
         } else {
             let var = self.next_var();
             self.variables.insert(var, name);
-            var
+            MaybeLocalVar::Local(var)
         }
     }
 
     /// Should only be called by a child scope: captures a local variable.
-    fn capture_var(&mut self, name: Symbol) -> Option<Var> {
+    fn capture_var(&mut self, name: Symbol) -> Option<MaybeLocalVar> {
         match self.local_var(name) {
-            Some(Var::Parent(i, depth)) => Some(Var::Parent(i, depth + 1)),
-            Some(Var::Local(i)) => {
+            Some(MaybeLocalVar::Parent(i, depth)) => Some(MaybeLocalVar::Parent(i, depth + 1)),
+            Some(MaybeLocalVar::Local(Var::Local(i))) => {
                 self.captured_vars.insert(Var::Local(i));
-                Some(Var::Parent(i, 1))
+                Some(MaybeLocalVar::Parent(i, 1))
             }
             v => v,
         }
     }
 
     /// Returns the local variable with the given name.
-    fn local_var(&mut self, name: Symbol) -> Option<Var> {
+    fn local_var(&mut self, name: Symbol) -> Option<MaybeLocalVar> {
         let var = self
             .variables
             .iter()
             .find(|(_, v)| **v == name)
-            .map(|(k, _)| *k);
+            .map(|(k, _)| MaybeLocalVar::Local(*k));
 
         match var {
             Some(var) => Some(var),
@@ -187,9 +210,11 @@ pub enum IRError {
     InvalidMethodName(Ident),
     InvalidModuleName(Ident),
     InvalidLeftHandSide(Ident),
+    InvalidParameter(Ident),
     InvalidMember(Ident),
     InvalidDefined,
     TooManySplats,
+    TooManyBlocks,
 }
 
 // TODO: spans?
@@ -203,9 +228,11 @@ impl fmt::Display for IRError {
             IRError::InvalidLeftHandSide(ident) => {
                 write!(f, "invalid left-hand side “{}”", ident)
             }
+            IRError::InvalidParameter(ident) => write!(f, "invalid parameter “{}”", ident),
             IRError::InvalidMember(ident) => write!(f, "invalid member “{}”", ident),
             IRError::InvalidDefined => write!(f, "invalid defined? (somewhere…)"),
-            IRError::TooManySplats => write!(f, "too many splats (somewhere…)"),
+            IRError::TooManySplats => write!(f, "too many splat parameters (somewhere…)"),
+            IRError::TooManyBlocks => write!(f, "too many block parameters (somewhere…)"),
         }
     }
 }
@@ -235,14 +262,14 @@ pub enum IROp {
     LoadI64(Var, i64),
     /// Loads a float number into the local variable.
     LoadFloat(Var, f64),
-    /// Loads a proc into the local variable.
-    LoadProc(Var, IRProc),
+    /// Loads a block into the local variable.
+    LoadBlock(Var, IRProc),
+    /// Loads a variable from a parent proc into the local variable.
+    LoadParent(Var, usize, usize),
     /// Pushes a positional argument.
     Arg(Var),
     /// Pushes an associative argument.
     ArgAssoc(Var, Var),
-    /// Pushes a splat argument.
-    ArgSplat(Var),
     /// Pushes a block argument.
     ArgBlock(Var),
     /// Calls a method and loads the result into a local variable.
@@ -271,6 +298,8 @@ pub enum IROp {
     AssignClassVar(Symbol, Var),
     /// Assigns the value of the second to the first.
     AssignIVar(Symbol, Var),
+    /// Assigns to a register in the parent proc.
+    AssignParent(usize, usize, Var),
     /// Start of a rescuable section.
     BeginRescue(Label),
     /// Jumps to the label if the current exception matches.
@@ -287,8 +316,6 @@ pub enum IROp {
     DefinedClassVar(Var, Symbol),
     /// `defined?` for an instance variable.
     DefinedIVar(Var, Symbol),
-    /// `yield`
-    Yield(Var),
     /// Defines a module.
     DefModule(Var, Symbol, IRProc),
     /// Defines a class.
@@ -299,8 +326,11 @@ pub enum IROp {
     /// Defines a singleton class.
     DefSingletonClass(Var, IRProc),
     /// Defines a singleton method.
-    // TODO: params?
     DefSingletonMethod(Var, Symbol, IRProc),
+    /// Defines a fallback for a parameter.
+    ParamFallback(Var, Label),
+    /// Asserts that the given parameter has a value.
+    Param(Var),
 }
 
 impl IROp {
@@ -318,10 +348,12 @@ impl IROp {
             | LoadSymbol(var, _)
             | LoadI64(var, _)
             | LoadFloat(var, _)
-            | LoadProc(var, _)
+            | LoadBlock(var, _)
+            | LoadParent(var, _, _)
             | Super(var)
             | RescueBind(var)
-            | Yield(var) => cb(var, true),
+            | ParamFallback(var, _)
+            | Param(var) => cb(var, true),
             LoadConst(out, inp, _)
             | AppendString(out, inp)
             | Call(out, inp, _)
@@ -331,7 +363,6 @@ impl IROp {
                 cb(out, true);
             }
             Arg(var)
-            | ArgSplat(var)
             | ArgBlock(var)
             | JumpIf(var, _)
             | JumpIfNot(var, _)
@@ -340,6 +371,7 @@ impl IROp {
             | AssignConst(_, var)
             | AssignClassVar(_, var)
             | AssignIVar(_, var)
+            | AssignParent(_, _, var)
             | RescueMatch(var, _)
             | DefinedConst(var, _)
             | DefinedGlobal(var, _)
@@ -376,7 +408,8 @@ impl IROp {
             | LoadSymbol(out, _)
             | LoadI64(out, _)
             | LoadFloat(out, _)
-            | LoadProc(out, _)
+            | LoadBlock(out, _)
+            | LoadParent(out, _, _)
             | RescueBind(out)
             | DefinedConst(out, _)
             | DefinedGlobal(out, _)
@@ -388,7 +421,6 @@ impl IROp {
             JumpIf(cond, _) => *cond == Var::Nil,
             Arg(_)
             | ArgAssoc(_, _)
-            | ArgSplat(_)
             | ArgBlock(_)
             | Call(_, _, _)
             | Super(_)
@@ -400,15 +432,17 @@ impl IROp {
             | AssignConst(_, _)
             | AssignClassVar(_, _)
             | AssignIVar(_, _)
+            | AssignParent(_, _, _)
             | BeginRescue(_)
             | RescueMatch(_, _)
             | EndRescue
-            | Yield(_)
             | DefModule(_, _, _)
             | DefClass(_, _, _, _)
             | DefMethod(_, _)
             | DefSingletonClass(_, _)
-            | DefSingletonMethod(_, _, _) => false,
+            | DefSingletonMethod(_, _, _)
+            | ParamFallback(_, _)
+            | Param(_) => false,
         }
     }
 
@@ -434,10 +468,10 @@ impl IROp {
             IROp::LoadSymbol(var, symbol) => format!("{} = :{};", var, sym!(symbol)),
             IROp::LoadI64(var, value) => format!("{} = {};", var, value),
             IROp::LoadFloat(var, value) => format!("{} = {};", var, value),
-            IROp::LoadProc(var, proc) => format!("{} = {};", var, proc.fmt_with_symbols(symbols)),
+            IROp::LoadBlock(var, proc) => format!("{} = {};", var, proc.fmt_with_symbols(symbols)),
+            IROp::LoadParent(var, i, d) => format!("{} = {}var_{};", var, "^".repeat(*d), i),
             IROp::Arg(var) => format!("push_arg {};", var),
             IROp::ArgAssoc(key, val) => format!("push_arg {} => {};", key, val),
-            IROp::ArgSplat(var) => format!("push_arg *{};", var),
             IROp::ArgBlock(var) => format!("push_arg &{};", var),
             IROp::Call(out, recv, name) => format!("{} = {}.{}();", out, recv, sym!(name)),
             IROp::Super(out) => format!("{} = super();", out),
@@ -452,6 +486,7 @@ impl IROp {
             IROp::AssignConst(name, rhs) => format!("{} = {};", sym!(name), rhs),
             IROp::AssignClassVar(name, rhs) => format!("@@{} = {};", sym!(name), rhs),
             IROp::AssignIVar(name, rhs) => format!("@{} = {};", sym!(name), rhs),
+            IROp::AssignParent(i, d, rhs) => format!("{}var_{} = {};", "^".repeat(*d), i, rhs),
             IROp::BeginRescue(label) => format!("begin rescue (rescue -> {})", label),
             IROp::RescueMatch(class, label) => format!("rescue instanceof {} -> {}", class, label),
             IROp::RescueBind(var) => format!("rescue => {};", var),
@@ -460,7 +495,6 @@ impl IROp {
             IROp::DefinedGlobal(var, name) => format!("{} = defined? ${};", var, sym!(name)),
             IROp::DefinedClassVar(var, name) => format!("{} = defined? @@{};", var, sym!(name)),
             IROp::DefinedIVar(var, name) => format!("{} = defined? ${};", var, sym!(name)),
-            IROp::Yield(var) => format!("{} = yield();", var),
             IROp::DefModule(parent, name, proc) => format!(
                 "module {}::{}: {}",
                 parent,
@@ -494,6 +528,8 @@ impl IROp {
                 sym!(name),
                 proc.fmt_with_symbols(symbols)
             ),
+            IROp::ParamFallback(var, label) => format!("if param {} given -> {};", var, label),
+            IROp::Param(var) => format!("(param {})", var),
         }
     }
 }
@@ -514,6 +550,22 @@ pub struct IRProc {
     pub(super) is_block: bool,
     /// IR ops.
     pub(super) items: Vec<IROp>,
+    /// Parameter mapping.
+    pub(super) params: IRParams,
+}
+
+#[derive(Debug, Default)]
+pub struct IRParams {
+    pub(super) positional: Vec<(Var, IRParamType)>,
+    pub(super) keyword: Vec<(Symbol, Var, IRParamType)>,
+    pub(super) block: Option<Var>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum IRParamType {
+    Mandatory,
+    Optional,
+    Splat,
 }
 
 impl IRProc {
@@ -536,6 +588,7 @@ impl IRProc {
             may_be_captured: &mut may_be_captured,
             var_counter: 0,
             no_local_vars: false,
+            block_var: None,
         };
 
         let out = scope.next_var();
@@ -549,6 +602,11 @@ impl IRProc {
             may_be_captured,
             is_block: false,
             items,
+            params: IRParams {
+                positional: Vec::new(),
+                keyword: Vec::new(),
+                block: None,
+            },
         };
         proc.optimize();
         Ok(proc)
@@ -559,6 +617,7 @@ impl IRProc {
         name: Symbol,
         body: &BodyStatement,
         symbols: &mut Symbols,
+        params: Option<&Parameters>,
     ) -> Result<IRProc, IRError> {
         let mut variables = FnvHashMap::default();
         let mut captured_vars = FnvHashSet::default();
@@ -573,10 +632,25 @@ impl IRProc {
             may_be_captured: &mut may_be_captured,
             var_counter: 0,
             no_local_vars: false,
+            block_var: None,
         };
+
+        let mut params = if let Some(params) = params {
+            Some(Self::expand_params(params, &mut scope, &mut items)?)
+        } else {
+            None
+        };
+
+        if let Some(params) = &params {
+            scope.block_var = params.block;
+        }
 
         let out = Self::expand_body_statement(body, &mut scope, &mut items)?;
         items.push(IROp::Return(out));
+
+        if let Some(params) = &mut params {
+            params.block = scope.block_var;
+        }
 
         let mut proc = IRProc {
             name,
@@ -585,6 +659,7 @@ impl IRProc {
             may_be_captured,
             is_block: false,
             items,
+            params: params.unwrap_or_default(),
         };
         proc.optimize();
         Ok(proc)
@@ -602,7 +677,7 @@ impl IRProc {
 
         for item in &mut self.items {
             match item {
-                IROp::LoadProc(_, proc)
+                IROp::LoadBlock(_, proc)
                 | IROp::DefModule(_, _, proc)
                 | IROp::DefClass(_, _, _, proc)
                 | IROp::DefMethod(_, proc)
@@ -671,7 +746,7 @@ impl IRProc {
         let mut var_lifetimes: BTreeMap<usize, (Vec<Var>, Vec<Var>)> = BTreeMap::new();
 
         for (var, (first_read, first_write)) in first_rws {
-            if self.captured_vars.contains(&var) || var.is_from_parent() {
+            if self.captured_vars.contains(&var) {
                 // Can’t remap a variable that’s used elsewhere
                 continue;
             }
@@ -893,7 +968,14 @@ impl IRProc {
                                     let name = scope.symbol(name);
                                     let var = scope.define_local_var(name);
                                     let value = Self::expand_expr(&rhs.items[0], scope, items)?;
-                                    items.push(IROp::Assign(var, value));
+                                    match var {
+                                        MaybeLocalVar::Local(var) => {
+                                            items.push(IROp::Assign(var, value));
+                                        }
+                                        MaybeLocalVar::Parent(i, d) => {
+                                            items.push(IROp::AssignParent(i, d, value));
+                                        }
+                                    }
                                 }
                                 _ => unimplemented!("multi assign"),
                             },
@@ -1033,9 +1115,13 @@ impl IRProc {
                 let mut block_scope = unsafe {
                     scope.sub_scope(&mut variables, &mut captured_vars, &mut may_be_captured)
                 };
+                let mut params =
+                    Self::expand_params(&block.params, &mut block_scope, &mut block_items)?;
+                block_scope.block_var = params.block;
                 let out = block_scope.next_var();
                 Self::expand_statements(&block.body, out, &mut block_scope, &mut block_items)?;
                 block_items.push(IROp::Return(out));
+                params.block = block_scope.block_var;
 
                 let name = if block.lambda {
                     scope.symbol("[lambda]")
@@ -1049,11 +1135,12 @@ impl IRProc {
                     captured_vars,
                     may_be_captured,
                     is_block: true,
+                    params,
                     items: block_items,
                 };
 
                 let out = scope.next_var();
-                items.push(IROp::LoadProc(out, proc));
+                items.push(IROp::LoadBlock(out, proc));
                 Ok(out)
             }
             Expression::Nil => {
@@ -1313,7 +1400,18 @@ impl IRProc {
                 if let Some((name, start, end, inclusive)) = simple_for {
                     let name = scope.symbol(name);
                     let counter = scope.define_local_var(name);
-                    items.push(IROp::LoadI64(counter, start));
+                    let local_counter = match counter {
+                        MaybeLocalVar::Local(counter) => {
+                            items.push(IROp::LoadI64(counter, start));
+                            counter
+                        }
+                        MaybeLocalVar::Parent(i, d) => {
+                            let local = scope.next_var();
+                            items.push(IROp::LoadI64(local, start));
+                            items.push(IROp::AssignParent(i, d, local));
+                            local
+                        }
+                    };
                     if start < end || (start == end && *inclusive) {
                         let top_label = scope.next_label();
                         let end_label = scope.next_label();
@@ -1327,7 +1425,7 @@ impl IRProc {
                         items.push(IROp::Arg(end_var));
                         items.push(IROp::Call(
                             loop_cond,
-                            counter,
+                            local_counter,
                             if *inclusive {
                                 scope.symbol("<=")
                             } else {
@@ -1337,7 +1435,10 @@ impl IRProc {
                         items.push(IROp::JumpIfNot(loop_cond, end_label));
                         Self::expand_statements(body, out, scope, items)?;
                         items.push(IROp::Arg(one));
-                        items.push(IROp::Call(out, counter, scope.symbol("+=")));
+                        items.push(IROp::Call(local_counter, local_counter, scope.symbol("+")));
+                        if let MaybeLocalVar::Parent(i, d) = counter {
+                            items.push(IROp::AssignParent(i, d, local_counter));
+                        }
                         items.push(IROp::Jump(top_label));
                         items.push(IROp::Label(end_label));
                     }
@@ -1345,7 +1446,6 @@ impl IRProc {
                 } else {
                     let mut block_items = Vec::new();
 
-                    // TODO: assign block params
                     let mut variables = FnvHashMap::default();
                     let mut captured_vars = FnvHashSet::default();
                     let mut may_be_captured = false;
@@ -1365,11 +1465,16 @@ impl IRProc {
                         may_be_captured: false,
                         is_block: true,
                         variables: FnvHashMap::default(),
+                        params: IRParams {
+                            positional: Vec::new(),
+                            keyword: Vec::new(),
+                            block: None,
+                        },
                     };
 
                     let expr = Self::expand_expr(expr, scope, items)?;
                     let block_var = scope.next_var();
-                    items.push(IROp::LoadProc(block_var, block));
+                    items.push(IROp::LoadBlock(block_var, block));
                     items.push(IROp::ArgBlock(block_var));
                     items.push(IROp::Call(expr, expr, scope.symbol("each")));
 
@@ -1484,13 +1589,13 @@ impl IRProc {
             }
             Expression::Break(_args) => unimplemented!("break"),
             Expression::Yield(args) => {
-                if let Some(_args) = args {
-                    unimplemented!("yield with args")
-                } else {
-                    let out = scope.next_var();
-                    items.push(IROp::Yield(out));
-                    Ok(out)
+                if let Some(args) = args {
+                    Self::expand_args(args, scope, items)?;
                 }
+                let out = scope.next_var();
+                let block = scope.block_var();
+                items.push(IROp::Call(out, block, scope.symbol("call")));
+                Ok(out)
             }
             Expression::Next(_args) => unimplemented!("next"),
             Expression::Redo => unimplemented!("redo"),
@@ -1535,7 +1640,7 @@ impl IRProc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
                         items.push(IROp::DefModule(expr, name, body));
                     }
                     DefPath::Root(name) => {
@@ -1545,7 +1650,7 @@ impl IRProc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
                         items.push(IROp::DefModule(root, name, body));
                     }
                     DefPath::Current(name) => {
@@ -1553,8 +1658,8 @@ impl IRProc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
-                        items.push(IROp::DefModule(Var::SelfRef, name, body));
+                        let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
+                        items.push(IROp::DefModule(Var::Nil, name, body));
                     }
                 }
                 Ok(Var::Nil)
@@ -1576,7 +1681,7 @@ impl IRProc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
                         items.push(IROp::DefClass(expr, name, superclass, body));
                     }
                     DefPath::Root(name) => {
@@ -1586,7 +1691,7 @@ impl IRProc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                        let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
                         items.push(IROp::DefClass(root, name, superclass, body));
                     }
                     DefPath::Current(name) => {
@@ -1594,8 +1699,8 @@ impl IRProc {
                             Ident::Const(name) => name,
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
-                        let body = IRProc::new_with_body(name, body, scope.symbols())?;
-                        items.push(IROp::DefClass(Var::SelfRef, name, superclass, body));
+                        let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
+                        items.push(IROp::DefClass(Var::Nil, name, superclass, body));
                     }
                 }
                 Ok(Var::Nil)
@@ -1610,23 +1715,7 @@ impl IRProc {
                     name => return Err(IRError::InvalidMethodName(name.clone())),
                 };
 
-                let mut did_find_splat = false;
-                for param in params {
-                    match param {
-                        Parameter::Splat(..) => {
-                            if !did_find_splat {
-                                did_find_splat = true;
-                            } else {
-                                return Err(IRError::TooManySplats);
-                            }
-                        }
-                        _ => (),
-                    }
-                }
-
-                // TODO: deal with params
-
-                let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                let body = IRProc::new_with_body(name, body, scope.symbols(), Some(params))?;
                 items.push(IROp::DefMethod(name, body));
 
                 Ok(Var::Nil)
@@ -1634,7 +1723,7 @@ impl IRProc {
             Expression::SingletonClass { expr, body } => {
                 let expr = Self::expand_expr(expr, scope, items)?;
                 let name = scope.symbol("[singleton class]");
-                let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
                 items.push(IROp::DefSingletonClass(expr, body));
                 Ok(Var::Nil)
             }
@@ -1654,22 +1743,7 @@ impl IRProc {
                     name => return Err(IRError::InvalidMethodName(name.clone())),
                 };
 
-                let mut did_find_splat = false;
-                for param in params {
-                    match param {
-                        Parameter::Splat(..) => {
-                            if !did_find_splat {
-                                did_find_splat = true;
-                            } else {
-                                return Err(IRError::TooManySplats);
-                            }
-                        }
-                        _ => (),
-                    }
-                }
-
-                // TODO: deal with params
-                let body = IRProc::new_with_body(name, body, scope.symbols())?;
+                let body = IRProc::new_with_body(name, body, scope.symbols(), Some(params))?;
                 items.push(IROp::DefSingletonMethod(expr, name, body));
                 Ok(Var::Nil)
             }
@@ -1688,7 +1762,12 @@ impl IRProc {
                 Ident::Local(name) => {
                     let name = scope.symbol(name);
                     let var = scope.define_local_var(name);
-                    items.push(IROp::Assign(var, rhs));
+                    match var {
+                        MaybeLocalVar::Local(var) => items.push(IROp::Assign(var, rhs)),
+                        MaybeLocalVar::Parent(i, d) => {
+                            items.push(IROp::AssignParent(i, d, rhs));
+                        }
+                    }
                     Ok(rhs)
                 }
                 Ident::Global(name) => {
@@ -1788,7 +1867,14 @@ impl IRProc {
                         Ident::Local(name) => {
                             let name = scope.symbol(name);
                             let var = scope.define_local_var(name);
-                            items.push(IROp::RescueBind(var));
+                            match var {
+                                MaybeLocalVar::Local(var) => items.push(IROp::RescueBind(var)),
+                                MaybeLocalVar::Parent(i, d) => {
+                                    let tmp = scope.next_var();
+                                    items.push(IROp::RescueBind(tmp));
+                                    items.push(IROp::AssignParent(i, d, tmp));
+                                }
+                            }
                         }
                         _ => unimplemented!("assign exception to non-local identifier"),
                     },
@@ -1823,8 +1909,8 @@ impl IRProc {
                     arg_items.push(IROp::Arg(expr));
                 }
                 Argument::Splat(expr) => {
-                    let expr = Self::expand_expr(expr, scope, items)?;
-                    arg_items.push(IROp::ArgSplat(expr));
+                    let _expr = Self::expand_expr(expr, scope, items)?;
+                    unimplemented!("splat")
                 }
             }
         }
@@ -1844,11 +1930,114 @@ impl IRProc {
         Ok(())
     }
 
+    fn expand_params(
+        params: &Parameters,
+        scope: &mut Scope,
+        items: &mut Vec<IROp>,
+    ) -> Result<IRParams, IRError> {
+        let mut positional = Vec::new();
+        let mut keyword = Vec::new();
+        let mut block = None;
+        let mut did_find_splat = false;
+
+        for param in params {
+            match param {
+                Parameter::Mandatory(name) => {
+                    let name = match name {
+                        Ident::Local(name) => scope.symbol(name),
+                        Ident::Keyword(name) => scope.symbol(name),
+                        name => return Err(IRError::InvalidParameter(name.clone())),
+                    };
+                    let var = scope.define_local_var(name).unwrap();
+                    positional.push((var, IRParamType::Mandatory));
+                    items.push(IROp::Param(var));
+                }
+                Parameter::Optional(name, default) => {
+                    let name = match name {
+                        Ident::Local(name) => scope.symbol(name),
+                        Ident::Keyword(name) => scope.symbol(name),
+                        name => return Err(IRError::InvalidParameter(name.clone())),
+                    };
+                    let var = scope.define_local_var(name).unwrap();
+                    positional.push((var, IRParamType::Optional));
+                    let end_label = scope.next_label();
+                    items.push(IROp::ParamFallback(var, end_label));
+                    let default = Self::expand_expr(default, scope, items)?;
+                    items.push(IROp::Assign(var, default));
+                    items.push(IROp::Label(end_label));
+                    items.push(IROp::Param(var));
+                }
+                Parameter::Splat(name) => {
+                    if did_find_splat {
+                        return Err(IRError::TooManySplats);
+                    } else if let Some(name) = name {
+                        did_find_splat = true;
+                        let name = match name {
+                            Ident::Local(name) => scope.symbol(name),
+                            Ident::Keyword(name) => scope.symbol(name),
+                            name => return Err(IRError::InvalidParameter(name.clone())),
+                        };
+                        let var = scope.define_local_var(name).unwrap();
+                        items.push(IROp::Param(var));
+                        positional.push((var, IRParamType::Splat));
+                    } else {
+                        did_find_splat = true;
+                        positional.push((Var::Void, IRParamType::Splat));
+                    }
+                }
+                Parameter::Keyword(name, default) => {
+                    let name = match name {
+                        Ident::Local(name) => scope.symbol(name),
+                        Ident::Keyword(name) => scope.symbol(name),
+                        name => return Err(IRError::InvalidParameter(name.clone())),
+                    };
+                    let var = scope.define_local_var(name).unwrap();
+                    keyword.push((
+                        name,
+                        var,
+                        if default.is_some() {
+                            IRParamType::Optional
+                        } else {
+                            IRParamType::Mandatory
+                        },
+                    ));
+                    if let Some(default) = default {
+                        let end_label = scope.next_label();
+                        items.push(IROp::ParamFallback(var, end_label));
+                        let default = Self::expand_expr(default, scope, items)?;
+                        items.push(IROp::Assign(var, default));
+                        items.push(IROp::Label(end_label));
+                    }
+                    items.push(IROp::Param(var));
+                }
+                Parameter::Block(name) => {
+                    if block.is_some() {
+                        return Err(IRError::TooManyBlocks);
+                    }
+                    let name = match name {
+                        Ident::Local(name) => scope.symbol(name),
+                        Ident::Keyword(name) => scope.symbol(name),
+                        name => return Err(IRError::InvalidParameter(name.clone())),
+                    };
+                    let var = scope.define_local_var(name).unwrap();
+                    block = Some(var);
+                    items.push(IROp::Param(var));
+                }
+            }
+        }
+
+        Ok(IRParams {
+            positional,
+            keyword,
+            block,
+        })
+    }
+
     fn load_var(ident: &Ident, scope: &mut Scope, items: &mut Vec<IROp>) -> Result<Var, IRError> {
         match ident {
             Ident::Local(name) => {
                 let name = scope.symbol(name);
-                if let Some(var) = scope.local_var(name) {
+                if let Some(var) = Self::read_local_var(name, scope, items)? {
                     Ok(var)
                 } else {
                     let out = scope.next_var();
@@ -1858,7 +2047,7 @@ impl IRProc {
             }
             Ident::Keyword(name) => {
                 let name = scope.symbol(name);
-                if let Some(var) = scope.local_var(name) {
+                if let Some(var) = Self::read_local_var(name, scope, items)? {
                     Ok(var)
                 } else {
                     let out = scope.next_var();
@@ -1897,6 +2086,22 @@ impl IRProc {
                 Ok(out)
             }
         }
+    }
+
+    fn read_local_var(
+        name: Symbol,
+        scope: &mut Scope,
+        items: &mut Vec<IROp>,
+    ) -> Result<Option<Var>, IRError> {
+        Ok(match scope.local_var(name) {
+            Some(MaybeLocalVar::Local(var)) => Some(var),
+            Some(MaybeLocalVar::Parent(i, d)) => {
+                let tmp = scope.next_var();
+                items.push(IROp::LoadParent(tmp, i, d));
+                Some(tmp)
+            }
+            None => None,
+        })
     }
 
     fn number_to_i64(positive: bool, value: &NumericValue) -> Option<i64> {

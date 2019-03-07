@@ -29,6 +29,7 @@ impl OwnedParseError {
         &self.error
     }
 
+    /// Display-formatting with ANSI colors.
     pub fn fmt_ansi(&self) -> String {
         self.error.fmt_with_src(&self.input, true)
     }
@@ -65,8 +66,12 @@ impl fmt::Display for CompileError {
     }
 }
 
-/// Compiles Ruby source code.
-pub fn compile(name: &str, input: String, symbols: &mut Symbols) -> Result<Proc, CompileError> {
+/// Compiles Ruby source code into an intermediate representation.
+pub fn compile_ir(
+    name: &str,
+    input: String,
+    symbols: &mut Symbols,
+) -> Result<ir::IRProc, CompileError> {
     let input = Pin::new(Box::new(input));
     let input_ref = unsafe { &*(&*input as *const String) };
 
@@ -89,8 +94,12 @@ pub fn compile(name: &str, input: String, symbols: &mut Symbols) -> Result<Proc,
     };
 
     let name = symbols.symbol(name);
-    let proc = ir::IRProc::new(name, &ast, symbols).map_err(CompileError::IR)?;
-    Ok(proc.into())
+    Ok(ir::IRProc::new(name, &ast, symbols).map_err(CompileError::IR)?)
+}
+
+/// Compiles Ruby source code.
+pub fn compile(name: &str, input: String, symbols: &mut Symbols) -> Result<Proc, CompileError> {
+    Ok(compile_ir(name, input, symbols)?.into())
 }
 
 #[test]

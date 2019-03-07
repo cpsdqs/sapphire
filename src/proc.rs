@@ -1,14 +1,19 @@
 //! Ruby procs.
 
+use crate::context::Context;
+use crate::heap::Ref;
+use crate::object::{Object, ObjectType};
 use crate::symbol::Symbol;
+use crate::value::Value;
+use smallvec::SmallVec;
+use std::any::Any;
 use std::fmt::{self, Write};
 use std::sync::Arc;
 
-pub const RESERVED_REGISTERS: usize = 4;
-pub const PARENT: usize = 0;
-pub const NIL: usize = 1;
-pub const VOID: usize = 2;
-pub const SELF: usize = 3;
+pub const RESERVED_REGISTERS: usize = 3;
+pub const NIL: usize = 0;
+pub const VOID: usize = 1;
+pub const SELF: usize = 2;
 
 /// A procedure containing a set of VM instructions.
 #[derive(PartialEq)]
@@ -23,6 +28,8 @@ pub struct Proc {
     pub mode: AddressingMode,
     /// Bytecode.
     pub code: Vec<u8>,
+    /// Parameters.
+    pub params: Params,
 }
 
 impl fmt::Debug for Proc {
@@ -45,6 +52,33 @@ impl fmt::Debug for Proc {
     }
 }
 
+impl Object for Arc<Proc> {
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
+    }
+    fn object_type(&self) -> ObjectType {
+        ObjectType::Object
+    }
+    fn class(&self, context: &Context) -> Ref<Object> {
+        context.proc_class().clone()
+    }
+    fn get_ivar(&self, _: Symbol) -> Option<Value> {
+        None
+    }
+    fn set_ivar(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
+        Err(())
+    }
+    fn inspect(&self, context: &Context) -> String {
+        format!(
+            "<Proc {}>",
+            context.symbols().symbol_name(self.name).unwrap()
+        )
+    }
+}
+
 /// A static value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Static {
@@ -59,6 +93,15 @@ pub enum Static {
 pub enum AddressingMode {
     U8,
     U16,
+}
+
+impl AddressingMode {
+    pub fn addr_len(&self) -> usize {
+        match self {
+            AddressingMode::U8 => 1,
+            AddressingMode::U16 => 2,
+        }
+    }
 }
 
 macro_rules! def_op {
@@ -101,11 +144,12 @@ def_op! {
     LOAD_SYMBOL = 0x0A,
     LOAD_I64 = 0x0B,
     LOAD_FLOAT = 0x0C,
-    LOAD_PROC = 0x0D,
+    LOAD_BLOCK = 0x0D,
+    LOAD_PARENT = 0x0E,
     ARG = 0x12,
     ARG_ASSOC = 0x13,
-    ARG_SPLAT = 0x14,
-    ARG_BLOCK = 0x15,
+    ARG_BLOCK = 0x14,
+    READ_ARGS = 0x15,
     CALL = 0x10,
     SUPER = 0x11,
     NOT = 0x16,
@@ -118,18 +162,34 @@ def_op! {
     ASSIGN_CONST = 0x32,
     ASSIGN_CLASS_VAR = 0x33,
     ASSIGN_IVAR = 0x34,
+    ASSIGN_PARENT = 0x35,
     BEGIN_RESCUE = 0x40,
     RESCUE_MATCH = 0x41,
     RESCUE_BIND = 0x42,
     END_RESCUE = 0x43,
-    DEFINED_CONST = 0x35,
-    DEFINED_GLOBAL = 0x36,
-    DEFINED_CLASS_VAR = 0x37,
-    DEFINED_IVAR = 0x38,
-    YIELD = 0x17,
+    DEFINED_CONST = 0x36,
+    DEFINED_GLOBAL = 0x37,
+    DEFINED_CLASS_VAR = 0x38,
+    DEFINED_IVAR = 0x39,
     DEF_MODULE = 0x50,
     DEF_CLASS = 0x51,
     DEF_METHOD = 0x52,
     DEF_SINGLETON_CLASS = 0x53,
     DEF_SINGLETON_METHOD = 0x54,
+    PARAM_FALLBACK = 0x55,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Param {
+    Mandatory(u16),
+    Optional(u16),
+    Splat(u16),
+    // (key, register, mandatory)
+    Hash(SmallVec<[(Symbol, u16, bool); 8]>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Params {
+    pub params: SmallVec<[Param; 8]>,
+    pub block: u16,
 }

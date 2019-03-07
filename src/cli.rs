@@ -1,4 +1,4 @@
-use sapphire::compiler::compile;
+use sapphire::compiler::compile_ir;
 use sapphire::symbol::Symbols;
 use std::io::{self, Read};
 use std::process::exit;
@@ -13,12 +13,12 @@ fn main() {
         }
     }
     let mut symbols = Symbols::new();
-    let compiled = match compile("stdin", input, &mut symbols) {
+    let compiled_ir = match compile_ir("stdin", input, &mut symbols) {
         Ok(compiled) => compiled,
         Err(err) => {
             eprintln!("Failed to compile:\n{}", err.fmt_ansi());
             exit(1);
         }
     };
-    unimplemented!("run {:?}", compiled);
+    unimplemented!("run {}", compiled_ir.fmt_with_symbols(&symbols));
 }

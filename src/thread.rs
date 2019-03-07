@@ -1,7 +1,7 @@
 use crate::context::Context;
 use crate::heap::Ref;
-use crate::object::Object;
-use crate::proc::{AddressingMode, Op, Proc, Static, VOID};
+use crate::object::{Arguments, Object, RbClass};
+use crate::proc::{AddressingMode, Op, Proc, Static, NIL, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
 use smallvec::{Array, SmallVec};
@@ -11,16 +11,20 @@ use std::sync::Arc;
 struct Frame {
     proc: Arc<Proc>,
     register: SmallVec<[Value; 256]>,
-    current_self: Value,
 }
 
 impl Frame {
     fn new(proc: Arc<Proc>, current_self: Value) -> Frame {
-        Frame {
-            register: SmallVec::with_capacity(proc.registers),
-            proc,
-            current_self,
+        let mut register = SmallVec::with_capacity(proc.registers);
+        for _ in 0..proc.registers {
+            register.push(Value::Nil);
         }
+        register[SELF] = current_self;
+        Frame { register, proc }
+    }
+
+    fn current_self(&self) -> &Value {
+        &self.register[SELF]
     }
 }
 
@@ -29,8 +33,11 @@ pub struct Thread {
     frames: Stack<[Frame; 1024]>,
     pcs: Stack<[usize; 1024]>,
     rescues: Stack<[usize; 1024]>,
-    const_nodes: Stack<[Ref<Object>; 1024]>,
+    out_vars: Stack<[usize; 1024]>,
+    modules: Stack<[Ref<Object>; 1024]>,
     pc: usize,
+    arg_builder: ArgumentBuilder,
+    args: Option<Arguments>,
 }
 
 pub enum ThreadError {
@@ -47,23 +54,35 @@ impl Thread {
             frames: Stack::new(),
             pcs: Stack::new(),
             rescues: Stack::new(),
-            const_nodes: Stack::new(),
+            out_vars: Stack::new(),
+            modules: Stack::new(),
             pc: 0,
+            arg_builder: ArgumentBuilder::new(),
+            args: None,
         }
     }
 
-    fn push_frame(&mut self, proc: Arc<Proc>, new_self: Value) -> Result<(), ThreadError> {
+    fn push_frame(
+        &mut self,
+        proc: Arc<Proc>,
+        new_self: Value,
+        out_var: usize,
+        args: Option<Arguments>,
+    ) -> Result<(), ThreadError> {
         self.frames.push(Frame::new(proc, new_self))?;
         self.pcs.push(self.pc)?;
         self.pc = 0;
+        self.out_vars.push(out_var)?;
+        self.args = args;
         Ok(())
     }
 
-    fn pop_frame(&mut self) {
+    fn pop_frame(&mut self) -> Option<usize> {
         self.frames.pop();
         if let Some(pc) = self.pcs.pop() {
             self.pc = pc;
         }
+        self.out_vars.pop()
     }
 
     fn read_addr(&mut self) -> Result<usize, ThreadError> {
@@ -122,10 +141,9 @@ impl Thread {
             Op::LOAD_SYMBOL => self.op_load_symbol()?,
             Op::LOAD_I64 => self.op_load_i64()?,
             Op::LOAD_FLOAT => self.op_load_float()?,
-            Op::LOAD_PROC => self.op_load_proc()?,
+            Op::LOAD_BLOCK => self.op_load_proc()?,
             Op::ARG => self.op_arg()?,
             Op::ARG_ASSOC => self.op_arg_assoc()?,
-            Op::ARG_SPLAT => self.op_arg_splat()?,
             Op::ARG_BLOCK => self.op_arg_block()?,
             Op::CALL => self.op_call()?,
             Op::SUPER => self.op_super()?,
@@ -147,7 +165,6 @@ impl Thread {
             Op::DEFINED_GLOBAL => self.op_defined_global()?,
             Op::DEFINED_CLASS_VAR => self.op_defined_class_var()?,
             Op::DEFINED_IVAR => self.op_defined_ivar()?,
-            Op::YIELD => self.op_yield()?,
             Op::DEF_MODULE => self.op_def_module()?,
             Op::DEF_CLASS => self.op_def_class()?,
             Op::DEF_METHOD => self.op_def_method()?,
@@ -193,12 +210,12 @@ impl Thread {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
         match self
-            .const_nodes
+            .modules
             .top()
             .unwrap()
             .get()
-            .as_const_node()
-            .expect("Item in const node stack is not a const node")
+            .as_module()
+            .expect("Item in module stack is not a module")
             .get_const(name)
         {
             Some(value) => self.frames.top_mut().unwrap().register[out] = value,
@@ -211,7 +228,12 @@ impl Thread {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
         let frame = self.frames.top_mut().unwrap();
-        match frame.current_self.class(&self.context).get().get_ivar(name) {
+        match frame
+            .current_self()
+            .class(&self.context)
+            .get()
+            .get_ivar(name)
+        {
             Some(value) => frame.register[out] = value,
             None => frame.register[out] = Value::Nil,
         }
@@ -222,7 +244,7 @@ impl Thread {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
         let frame = self.frames.top_mut().unwrap();
-        match frame.current_self.get_ivar(name) {
+        match frame.current_self().get_ivar(name) {
             Some(value) => frame.register[out] = value,
             None => frame.register[out] = Value::Nil,
         }
@@ -296,23 +318,45 @@ impl Thread {
     }
     #[inline]
     fn op_arg(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let var = self.read_addr()?;
+        self.arg_builder
+            .push_arg(self.frames.top().unwrap().register[var].clone());
+        Ok(())
     }
     #[inline]
     fn op_arg_assoc(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
-    }
-    #[inline]
-    fn op_arg_splat(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let key = self.read_addr()?;
+        let value = self.read_addr()?;
+        let register = &self.frames.top().unwrap().register;
+        self.arg_builder
+            .push_hash(register[key].clone(), register[value].clone());
+        Ok(())
     }
     #[inline]
     fn op_arg_block(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let var = self.read_addr()?;
+        self.arg_builder
+            .push_block(self.frames.top().unwrap().register[var].clone());
+        Ok(())
     }
     #[inline]
     fn op_call(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let args = self.arg_builder.flush(); // TODO: pass args?
+        let out = self.read_addr()?;
+        let recv = self.read_addr()?;
+        let recv = self.frames.top().unwrap().register[recv].clone();
+        let method = self.read_symbol()?;
+        let resolved = recv
+            .class(&self.context)
+            .get()
+            .as_class_mut()
+            .expect("Receiver class is not a class")
+            .resolve_method(method);
+        match resolved {
+            Some(proc) => self.push_frame(proc, recv, out, Some(args))?,
+            None => unimplemented!("method_missing"),
+        }
+        Ok(())
     }
     #[inline]
     fn op_super(&mut self) -> Result<(), ThreadError> {
@@ -353,8 +397,9 @@ impl Thread {
     fn op_return(&mut self) -> Result<(), ThreadError> {
         let value = self.read_addr()?;
         let value = self.frames.top().unwrap().register[value].clone();
-        self.pop_frame();
-        self.frames.top_mut().unwrap().register[VOID] = value;
+        if let Some(out) = self.pop_frame() {
+            self.frames.top_mut().unwrap().register[out] = value;
+        }
         Ok(())
     }
     #[inline]
@@ -418,20 +463,68 @@ impl Thread {
         unimplemented!()
     }
     #[inline]
-    fn op_yield(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
-    }
-    #[inline]
     fn op_def_module(&mut self) -> Result<(), ThreadError> {
         unimplemented!()
     }
     #[inline]
     fn op_def_class(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let parent = self.read_addr()?;
+        let name = self.read_symbol()?;
+        let superclass = self.read_addr()?;
+        let superclass = match &self.frames.top().unwrap().register[superclass] {
+            Value::Ref(r) => {
+                if let Some(_) = r.get().as_class() {
+                    r.clone()
+                } else {
+                    unimplemented!("exception")
+                }
+            }
+            _ => unimplemented!("exception"),
+        };
+        let proc = match self.read_static()? {
+            Static::Proc(proc) => Arc::clone(proc),
+            _ => return Err(ThreadError::InvalidStatic),
+        };
+        let module = Value::Ref(Ref::new(RbClass::new(name, superclass, &self.context)));
+        let res = if parent == NIL {
+            self.modules
+                .top_mut()
+                .unwrap()
+                .get()
+                .as_module_mut()
+                .unwrap()
+                .set_const(name, module.clone())
+        } else if let Some(parent) = self.frames.top_mut().unwrap().register[parent].as_module_mut()
+        {
+            parent.set_const(name, module.clone())
+        } else {
+            unimplemented!("def class in non-const")
+        };
+        if let Err(()) = res {
+            unimplemented!("exception")
+        }
+        self.push_frame(proc, module, VOID, None)?;
+        Ok(())
     }
     #[inline]
     fn op_def_method(&mut self) -> Result<(), ThreadError> {
-        unimplemented!()
+        let name = self.read_symbol()?;
+        let proc = match self.read_static()? {
+            Static::Proc(proc) => Arc::clone(proc),
+            _ => return Err(ThreadError::InvalidStatic),
+        };
+        let res = self
+            .modules
+            .top_mut()
+            .unwrap()
+            .get()
+            .as_module_mut()
+            .unwrap()
+            .def_method(name, proc);
+        if let Err(()) = res {
+            unimplemented!("exception")
+        }
+        Ok(())
     }
     #[inline]
     fn op_def_singleton_class(&mut self) -> Result<(), ThreadError> {
@@ -502,5 +595,44 @@ impl<T: Array> Stack<T> {
         } else {
             None
         }
+    }
+}
+
+struct ArgumentBuilder {
+    items: SmallVec<[Value; 32]>,
+    hash: Vec<(Value, Value)>,
+    block: Option<Value>,
+}
+
+impl ArgumentBuilder {
+    fn new() -> ArgumentBuilder {
+        ArgumentBuilder {
+            items: SmallVec::new(),
+            hash: Vec::new(),
+            block: None,
+        }
+    }
+
+    fn push_arg(&mut self, arg: Value) {
+        self.items.push(arg);
+    }
+
+    fn push_hash(&mut self, key: Value, value: Value) {
+        self.hash.push((key, value));
+    }
+
+    fn push_block(&mut self, arg: Value) {
+        self.block = Some(arg);
+    }
+
+    fn flush(&mut self) -> Arguments {
+        let items = mem::replace(&mut self.items, SmallVec::new());
+        let block = mem::replace(&mut self.block, None);
+
+        if !self.hash.is_empty() {
+            unimplemented!("create hash and append")
+        }
+
+        Arguments { args: items, block }
     }
 }
