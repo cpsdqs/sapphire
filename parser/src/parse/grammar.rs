@@ -621,7 +621,7 @@ sapphire_parser_gen::parser! {
     // 10.2 Compound Statement
     compound_statement: StatementList = {
         // statement_list? separator_list?
-        s: opt!(statement_list) ws opt!(separator_list) => {
+        s: opt!(statement_list) opt!(separator_list) => {
             s.unwrap_or_else(|| Vec::with_capacity(0))
         }
     }
@@ -736,8 +736,7 @@ sapphire_parser_gen::parser! {
         i: variable ws token!(OAssign) wss e: expression => {
             Expression::AssignVar(i, Box::new(e))
         },
-        i: variable => (Expression::Variable(i)),
-        not!(token!(Kend); err: Expression) i: method_name
+        not!(token!(Kend, Kdo, Kdef, Kclass, Kmodule,); err: Expression) i: method_name
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {
             let mut args = a.unwrap_or_default();
@@ -755,6 +754,7 @@ sapphire_parser_gen::parser! {
                 }
             }
         },
+        i: variable => (Expression::Variable(i)),
         token!(PDblColon) wss i: token!(IConstant) ws token!(OAssign) wss e: expression => {
             Expression::AssignConst {
                 member: None,
@@ -864,7 +864,7 @@ sapphire_parser_gen::parser! {
         lambda,
     }
     brace_block: Block = {
-        token!(PLBrace) wss p: opt!(parameter_list) wss
+        token!(PLBrace) wss p: opt!(block_parameter_list) wss
             b: compound_statement wss token!(PRBrace) => {
             Block {
                 params: p.unwrap_or_default(),
@@ -874,7 +874,7 @@ sapphire_parser_gen::parser! {
         }
     }
     do_block: Block = {
-        token!(Kdo) wss p: opt!(parameter_list) wss
+        token!(Kdo) wss p: opt!(block_parameter_list) wss
             b: compound_statement wss token!(Kend) => {
             Block {
                 params: p.unwrap_or_default(),
@@ -904,6 +904,9 @@ sapphire_parser_gen::parser! {
     lambda_parameter: Parameters = {
         token!(PLParen) wss p: opt!(parameter_list) wss token!(PRParen) => (p.unwrap_or_default()),
         parameter_list,
+    }
+    block_parameter_list: Parameters = {
+        token!(OBitOr) wss p: opt!(parameter_list) wss token!(OBitOr) => (p.unwrap_or_default()),
     }
 
     parameter_list: Parameters = {

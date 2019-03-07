@@ -19,6 +19,15 @@ pub enum Var {
     SelfRef,
 }
 
+impl Var {
+    fn is_special(&self) -> bool {
+        match self {
+            Var::Nil | Var::Void | Var::SelfRef => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum MaybeLocalVar {
     /// A local variable from the parent (e.g. in a block), with the depth of the parent
@@ -561,6 +570,40 @@ pub struct IRParams {
     pub(super) block: Option<Var>,
 }
 
+impl IRParams {
+    fn fmt_with_symbols(&self, symbols: &Symbols) -> String {
+        use std::fmt::Write;
+        let mut f = String::from("params: ");
+        for (var, ty) in &self.positional {
+            match ty {
+                IRParamType::Mandatory => write!(f, "{}, ", var).unwrap(),
+                IRParamType::Optional => write!(f, "{} = .., ", var).unwrap(),
+                IRParamType::Splat => write!(f, "*{}, ", var).unwrap(),
+            }
+        }
+        for (key, var, ty) in &self.keyword {
+            match ty {
+                IRParamType::Mandatory => write!(
+                    f,
+                    "{}: -> {}, ",
+                    symbols.symbol_name(*key).unwrap_or("?"),
+                    var
+                )
+                .unwrap(),
+                IRParamType::Optional => write!(
+                    f,
+                    "{}: .. -> {}, ",
+                    symbols.symbol_name(*key).unwrap_or("?"),
+                    var
+                )
+                .unwrap(),
+                IRParamType::Splat => write!(f, "invalid, ").unwrap(),
+            }
+        }
+        f
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum IRParamType {
     Mandatory,
@@ -746,8 +789,8 @@ impl IRProc {
         let mut var_lifetimes: BTreeMap<usize, (Vec<Var>, Vec<Var>)> = BTreeMap::new();
 
         for (var, (first_read, first_write)) in first_rws {
-            if self.captured_vars.contains(&var) {
-                // Can’t remap a variable that’s used elsewhere
+            if self.captured_vars.contains(&var) || var.is_special() {
+                // Can’t remap a variable that’s used elsewhere or is special
                 continue;
             }
 
@@ -896,6 +939,24 @@ impl IRProc {
                     }
                 }
                 _ => (),
+            }
+        }
+
+
+        // also remove useless jumps (which would probably cause the VM to loop endlessly, actually)
+        let mut i = 0;
+        while i < self.items.len() {
+            match self.items[i] {
+                IROp::Jump(target) => {
+                    i += 1;
+                    if let Some(IROp::Label(label)) = self.items.get(i) {
+                        if label == &target {
+                            i -= 1;
+                            self.items.remove(i);
+                        }
+                    }
+                }
+                _ => i += 1,
             }
         }
     }
@@ -1659,7 +1720,7 @@ impl IRProc {
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
                         let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
-                        items.push(IROp::DefModule(Var::Nil, name, body));
+                        items.push(IROp::DefModule(Var::Void, name, body));
                     }
                 }
                 Ok(Var::Nil)
@@ -1700,7 +1761,7 @@ impl IRProc {
                             name => return Err(IRError::InvalidModuleName(name.clone())),
                         });
                         let body = IRProc::new_with_body(name, body, scope.symbols(), None)?;
-                        items.push(IROp::DefClass(Var::Nil, name, superclass, body));
+                        items.push(IROp::DefClass(Var::Void, name, superclass, body));
                     }
                 }
                 Ok(Var::Nil)
@@ -1846,8 +1907,8 @@ impl IRProc {
         items.push(IROp::BeginRescue(rescue_label));
         let out = scope.next_var();
         Self::expand_statements(&body.body, out, scope, items)?;
-        items.push(IROp::Jump(else_label));
         items.push(IROp::EndRescue);
+        items.push(IROp::Jump(else_label));
         items.push(IROp::Label(rescue_label));
         for rescue in &body.rescue {
             let end_label = scope.next_label();
@@ -2301,6 +2362,9 @@ impl IRProc {
         use std::fmt::Write;
 
         let mut f = String::from("Proc {\n");
+        for line in self.params.fmt_with_symbols(symbols).lines() {
+            write!(f, "    {}\n", line).unwrap();
+        }
         for (k, v) in &self.variables {
             let name = symbols.symbol_name(*v).unwrap_or("?");
             if self.captured_vars.contains(k) {

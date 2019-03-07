@@ -1,7 +1,7 @@
 use crate::context::Context;
 use crate::heap::Ref;
 use crate::object::{Arguments, Object, RbClass};
-use crate::proc::{AddressingMode, Op, Proc, Static, NIL, SELF, VOID};
+use crate::proc::{AddressingMode, Op, Proc, Static, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
 use smallvec::{Array, SmallVec};
@@ -486,7 +486,7 @@ impl Thread {
             _ => return Err(ThreadError::InvalidStatic),
         };
         let module = Value::Ref(Ref::new(RbClass::new(name, superclass, &self.context)));
-        let res = if parent == NIL {
+        let res = if parent == VOID {
             self.modules
                 .top_mut()
                 .unwrap()

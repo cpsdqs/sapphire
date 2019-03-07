@@ -160,8 +160,7 @@ pub fn parser(tokens: PTokenStream) -> PTokenStream {
                 let mut remove_direct_recursion = remove_direct_recursion;
 
                 // remove indirect left-recursion
-                let mut rules_to_remove = Vec::new();
-                let mut rules_to_add = Vec::new();
+                let mut rules_to_replace = Vec::new();
                 for (index, rule) in symbol.rules.iter().enumerate() {
                     if let Some(PatternItem::Symbol(ident)) = rule.first_pattern_item() {
                         let assigned_name = &rule.pattern[0].0;
@@ -174,8 +173,9 @@ pub fn parser(tokens: PTokenStream) -> PTokenStream {
 
                             did_change_something = true;
                             remove_direct_recursion = true;
-                            rules_to_remove.push(index);
                             mark_may_be_dead_code.push(*target);
+
+                            let mut spilled_rules = Vec::new();
 
                             let target_symbol = symbols.get(target).unwrap();
                             for target_rule in &target_symbol.rules {
@@ -188,11 +188,13 @@ pub fn parser(tokens: PTokenStream) -> PTokenStream {
                                     ),
                                 );
 
-                                rules_to_add.push(Rule {
+                                spilled_rules.push(Rule {
                                     pattern,
                                     handler: rule.handler.clone(),
                                 });
                             }
+
+                            rules_to_replace.push((index, spilled_rules));
                         }
                     }
                 }
@@ -200,13 +202,13 @@ pub fn parser(tokens: PTokenStream) -> PTokenStream {
                 let symbol = symbols.get_mut(&node).unwrap();
 
                 let mut offset = 0;
-                for index in rules_to_remove {
-                    symbol.rules.remove(index - offset);
-                    offset += 1;
-                }
-
-                for rule in rules_to_add {
-                    symbol.rules.push(rule);
+                for (index, new_rules) in rules_to_replace {
+                    symbol.rules.remove(index + offset);
+                    for rule in new_rules.into_iter() {
+                        symbol.rules.insert(index + offset, rule);
+                        offset += 1;
+                    }
+                    offset -= 1;
                 }
 
                 // remove direct left-recursion
