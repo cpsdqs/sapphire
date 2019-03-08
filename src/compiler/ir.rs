@@ -737,7 +737,12 @@ impl IRProc {
     /// partitioned into two sections such that in both sections only one of the two variables is
     /// used. Since nil-reads will be turned into [Var::Nil], this shouldn’t create any unexpected
     /// behavior.
+    #[allow(unreachable_code)] // temp
     fn collapse_vars(&mut self) {
+        // FIXME: this doesn’t work with loops (need to find backward jumps and push all variable
+        // reads to the jump instruction & all writes to the target label or something)
+        return;
+
         // find first and last reads/writes of variables
         let mut first_rws: FnvHashMap<Var, (Option<usize>, Option<usize>)> = FnvHashMap::default();
         let mut last_rws: FnvHashMap<Var, (Option<usize>, Option<usize>)> = FnvHashMap::default();
@@ -1203,10 +1208,7 @@ impl IRProc {
                 items.push(IROp::LoadBlock(out, proc));
                 Ok(out)
             }
-            Expression::Nil => {
-                let out = scope.next_var();
-                Ok(out)
-            }
+            Expression::Nil => Ok(Var::Nil),
             Expression::SelfExpr => Ok(Var::SelfRef),
             Expression::True | Expression::False => {
                 let is_true = expr == &Expression::True;
@@ -1555,8 +1557,15 @@ impl IRProc {
                             return Err(IRError::InvalidMethodName(name.clone()));
                         }
                     };
-                    items.push(IROp::Call(out, out, name));
-                    Ok(out)
+                    if out.is_special() {
+                        let recv = out;
+                        let out = scope.next_var();
+                        items.push(IROp::Call(out, recv, name));
+                        Ok(out)
+                    } else {
+                        items.push(IROp::Call(out, out, name));
+                        Ok(out)
+                    }
                 } else {
                     Self::expand_args(args, scope, items)?;
                     let out = scope.next_var();
@@ -1806,6 +1815,12 @@ impl IRProc {
                 let body = IRProc::new_with_body(name, body, scope.symbols(), Some(params))?;
                 items.push(IROp::DefSingletonMethod(expr, name, body));
                 Ok(Var::Nil)
+            }
+            Expression::AssignVar(lhs, rhs) => {
+                let rhs = Self::expand_expr(rhs, scope, items)?;
+                let out =
+                    Self::expand_assignment(&LeftHandSide::Var(lhs.clone()), rhs, scope, items)?;
+                Ok(out)
             }
             _ => unimplemented!("expr"),
         }

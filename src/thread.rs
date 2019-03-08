@@ -141,7 +141,8 @@ impl Thread {
             Op::LOAD_SYMBOL => self.op_load_symbol()?,
             Op::LOAD_I64 => self.op_load_i64()?,
             Op::LOAD_FLOAT => self.op_load_float()?,
-            Op::LOAD_BLOCK => self.op_load_proc()?,
+            Op::LOAD_BLOCK => self.op_load_block()?,
+            Op::LOAD_PARENT => self.op_load_parent()?,
             Op::ARG => self.op_arg()?,
             Op::ARG_ASSOC => self.op_arg_assoc()?,
             Op::ARG_BLOCK => self.op_arg_block()?,
@@ -157,6 +158,7 @@ impl Thread {
             Op::ASSIGN_CONST => self.op_assign_const()?,
             Op::ASSIGN_CLASS_VAR => self.op_assign_class_var()?,
             Op::ASSIGN_IVAR => self.op_assign_ivar()?,
+            Op::ASSIGN_PARENT => self.op_assign_parent()?,
             Op::BEGIN_RESCUE => self.op_begin_rescue()?,
             Op::RESCUE_MATCH => self.op_rescue_match()?,
             Op::RESCUE_BIND => self.op_rescue_bind()?,
@@ -170,6 +172,7 @@ impl Thread {
             Op::DEF_METHOD => self.op_def_method()?,
             Op::DEF_SINGLETON_CLASS => self.op_def_singleton_class()?,
             Op::DEF_SINGLETON_METHOD => self.op_def_singleton_method()?,
+            Op::PARAM_FALLBACK => self.op_param_fallback()?,
             _ => return Err(ThreadError::InvalidOperation),
         }
 
@@ -306,7 +309,7 @@ impl Thread {
         }
     }
     #[inline]
-    fn op_load_proc(&mut self) -> Result<(), ThreadError> {
+    fn op_load_block(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
         match self.read_static()? {
             Static::Proc(value) => {
@@ -315,6 +318,10 @@ impl Thread {
             }
             _ => Err(ThreadError::InvalidStatic),
         }
+    }
+    #[inline]
+    fn op_load_parent(&mut self) -> Result<(), ThreadError> {
+        unimplemented!()
     }
     #[inline]
     fn op_arg(&mut self) -> Result<(), ThreadError> {
@@ -431,6 +438,10 @@ impl Thread {
         unimplemented!()
     }
     #[inline]
+    fn op_assign_parent(&mut self) -> Result<(), ThreadError> {
+        unimplemented!()
+    }
+    #[inline]
     fn op_begin_rescue(&mut self) -> Result<(), ThreadError> {
         unimplemented!()
     }
@@ -532,6 +543,10 @@ impl Thread {
     }
     #[inline]
     fn op_def_singleton_method(&mut self) -> Result<(), ThreadError> {
+        unimplemented!()
+    }
+    #[inline]
+    fn op_param_fallback(&mut self) -> Result<(), ThreadError> {
         unimplemented!()
     }
 }

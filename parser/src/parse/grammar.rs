@@ -729,6 +729,9 @@ sapphire_parser_gen::parser! {
             }
         },
         method_definition,
+        if_expression,
+        while_expression,
+        for_expression,
         e: expression ws token!(PLBracket) wss a: opt!(indexing_argument_list) wss
             token!(PRBracket) => {
             Expression::Index(Box::new(e), a.unwrap_or_default())
@@ -736,7 +739,8 @@ sapphire_parser_gen::parser! {
         i: variable ws token!(OAssign) wss e: expression => {
             Expression::AssignVar(i, Box::new(e))
         },
-        not!(token!(Kend, Kdo, Kdef, Kclass, Kmodule,); err: Expression) i: method_name
+        not!(keyword; err: Expression)
+            i: method_name
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {
             let mut args = a.unwrap_or_default();
@@ -754,7 +758,11 @@ sapphire_parser_gen::parser! {
                 }
             }
         },
-        i: variable => (Expression::Variable(i)),
+        not!(keyword; err: Expression) i: variable => (Expression::Variable(i)),
+        token!(Kself) => (Expression::SelfExpr),
+        token!(Ktrue) => (Expression::True),
+        token!(Kfalse) => (Expression::False),
+        token!(Knil) => (Expression::Nil),
         token!(PDblColon) wss i: token!(IConstant) ws token!(OAssign) wss e: expression => {
             Expression::AssignConst {
                 member: None,
@@ -949,11 +957,14 @@ sapphire_parser_gen::parser! {
         }]
     }
     then_clause: StatementList = {
-        opt!(separator) wss token!(Kthen) c: compound_statement => c,
+        opt!(separator) wss token!(Kthen) wss c: compound_statement => c,
         separator wss c: compound_statement => c,
     }
     else_clause: StatementList = {
         token!(Kelse) wss c: compound_statement => c,
+    }
+    elsif_clause: (Expression, StatementList) = {
+        token!(Kelsif) wss c: expression ws b: then_clause => ((c, b)),
     }
     rescue_clause: Rescue = {
         token!(Krescue)
@@ -978,6 +989,43 @@ sapphire_parser_gen::parser! {
     }
     ensure_clause: StatementList = {
         token!(Kensure) wss c: compound_statement => c,
+    }
+
+    if_expression: Expression = {
+        token!(Kif) wss c: expression
+            ws t: then_clause
+            wss p: many0!(elsif_clause)
+            wss e: opt!(else_clause)
+            wss token!(Kend) => {
+            Expression::If {
+                cond: Box::new(c),
+                then: t,
+                elsif: p,
+                else_: e,
+            }
+        }
+    }
+
+    while_expression: Expression = {
+        token!(Kwhile) wss c: expression
+            ws t: do_clause
+            wss token!(Kend) => {
+            Expression::While(Box::new(c), t)
+        }
+    }
+    do_clause: StatementList = {
+        token!(Kdo) ws opt!(separator) wss c: compound_statement => c,
+        separator wss c: compound_statement => c,
+    }
+
+    for_expression: Expression = {
+        token!(Kfor) wss v: variable
+            ws token!(Kin)
+            wss e: expression
+            ws b: do_clause
+            wss token!(Kend) => {
+            Expression::For(vec![MultiLHSItem::LHS(LeftHandSide::Var(v))], Box::new(e), b)
+        }
     }
 
     method_definition: Expression = {
