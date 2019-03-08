@@ -1247,36 +1247,6 @@ impl IRProc {
                 items.push(IROp::Not(expr, expr));
                 Ok(expr)
             }
-            Expression::And(lhs, rhs) => {
-                // short-circuited && implemented as follows:
-                // result = LHS
-                // if not result goto end
-                // rhs = RHS
-                // result = rhs
-                // end:
-                let result = Self::expand_expr(lhs, scope, items)?;
-                let end_label = scope.next_label();
-                items.push(IROp::JumpIfNot(result, end_label));
-                let rhs = Self::expand_expr(rhs, scope, items)?;
-                items.push(IROp::Assign(result, rhs));
-                items.push(IROp::Label(end_label));
-                Ok(result)
-            }
-            Expression::Or(lhs, rhs) => {
-                // short-circuited || implemented as follows:
-                // result = LHS
-                // if result goto end
-                // rhs = RHS
-                // result = rhs
-                // end:
-                let result = Self::expand_expr(lhs, scope, items)?;
-                let end_label = scope.next_label();
-                items.push(IROp::JumpIf(result, end_label));
-                let rhs = Self::expand_expr(rhs, scope, items)?;
-                items.push(IROp::Assign(result, rhs));
-                items.push(IROp::Label(end_label));
-                Ok(result)
-            }
             Expression::UMinus(expr) => {
                 let out = Self::expand_expr(expr, scope, items)?;
                 items.push(IROp::Call(out, out, scope.symbol("-@")));
@@ -1295,38 +1265,69 @@ impl IRProc {
             Expression::BinOp(lhs, op, rhs) => {
                 use sapphire_parser::ast::BinaryOp::*;
 
-                let lhs = Self::expand_expr(lhs, scope, items)?;
-                let rhs = Self::expand_expr(rhs, scope, items)?;
-                items.push(IROp::Arg(rhs));
+                if let KeywordAnd = op {
+                    // short-circuited && implemented as follows:
+                    // result = LHS
+                    // if not result goto end
+                    // rhs = RHS
+                    // result = rhs
+                    // end:
+                    let result = Self::expand_expr(lhs, scope, items)?;
+                    let end_label = scope.next_label();
+                    items.push(IROp::JumpIfNot(result, end_label));
+                    let rhs = Self::expand_expr(rhs, scope, items)?;
+                    items.push(IROp::Assign(result, rhs));
+                    items.push(IROp::Label(end_label));
+                    Ok(result)
+                } else if let KeywordOr = op {
+                    // short-circuited || implemented as follows:
+                    // result = LHS
+                    // if result goto end
+                    // rhs = RHS
+                    // result = rhs
+                    // end:
+                    let result = Self::expand_expr(lhs, scope, items)?;
+                    let end_label = scope.next_label();
+                    items.push(IROp::JumpIf(result, end_label));
+                    let rhs = Self::expand_expr(rhs, scope, items)?;
+                    items.push(IROp::Assign(result, rhs));
+                    items.push(IROp::Label(end_label));
+                    Ok(result)
+                } else {
+                    let lhs = Self::expand_expr(lhs, scope, items)?;
+                    let rhs = Self::expand_expr(rhs, scope, items)?;
+                    items.push(IROp::Arg(rhs));
 
-                let op = match op {
-                    Neq => "!=",
-                    NMatch => "!~",
-                    And => "&&",
-                    Or => "||",
-                    BitXor => "^",
-                    BitAnd => "&",
-                    BitOr => "|",
-                    Cmp => "<=>",
-                    CaseEq => "===",
-                    Eq => "==",
-                    Match => "=~",
-                    Geq => ">=",
-                    Shr => ">>",
-                    Gt => ">",
-                    Leq => "<=",
-                    Shl => "<<",
-                    Lt => "<",
-                    Add => "+",
-                    Sub => "-",
-                    Pow => "**",
-                    Mul => "*",
-                    Div => "/",
-                    Rem => "%",
-                };
+                    let op = match op {
+                        Neq => "!=",
+                        NMatch => "!~",
+                        And => "&&",
+                        Or => "||",
+                        BitXor => "^",
+                        BitAnd => "&",
+                        BitOr => "|",
+                        Cmp => "<=>",
+                        CaseEq => "===",
+                        Eq => "==",
+                        Match => "=~",
+                        Geq => ">=",
+                        Shr => ">>",
+                        Gt => ">",
+                        Leq => "<=",
+                        Shl => "<<",
+                        Lt => "<",
+                        Add => "+",
+                        Sub => "-",
+                        Pow => "**",
+                        Mul => "*",
+                        Div => "/",
+                        Rem => "%",
+                        KeywordAnd | KeywordOr => unreachable!(),
+                    };
 
-                items.push(IROp::Call(lhs, lhs, scope.symbol(op)));
-                Ok(lhs)
+                    items.push(IROp::Call(lhs, lhs, scope.symbol(op)));
+                    Ok(lhs)
+                }
             }
             Expression::If {
                 cond,

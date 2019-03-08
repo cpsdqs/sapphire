@@ -159,6 +159,8 @@ impl<'input> From<Token<'input>> for AssignmentOp {
 pub enum BinaryOp {
     Neq,
     NMatch,
+    KeywordAnd,
+    KeywordOr,
     And,
     Or,
     BitXor,
@@ -387,10 +389,6 @@ pub enum Expression {
     HashConstructor(Vec<(Expression, Expression)>),
     /// `not .0`
     Not(Box<Expression>),
-    /// `.0 and .1`
-    And(Box<Expression>, Box<Expression>),
-    /// `.0 or .1`
-    Or(Box<Expression>, Box<Expression>),
     /// `-.0`
     UMinus(Box<Expression>),
     /// `+.0`

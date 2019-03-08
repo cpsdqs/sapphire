@@ -481,6 +481,136 @@ pub fn program(mut i: Cursor) -> IResult<StatementList> {
     Ok((i, statements))
 }
 
+fn prec_level(op: BinaryOp) -> usize {
+    match op {
+        BinaryOp::KeywordOr => 10,
+        BinaryOp::KeywordAnd => 9,
+        BinaryOp::Eq
+        | BinaryOp::Neq
+        | BinaryOp::Match
+        | BinaryOp::NMatch
+        | BinaryOp::Cmp
+        | BinaryOp::CaseEq => 8,
+        BinaryOp::Geq | BinaryOp::Gt | BinaryOp::Leq | BinaryOp::Lt => 7,
+        BinaryOp::Or | BinaryOp::BitOr | BinaryOp::BitXor => 6,
+        BinaryOp::And | BinaryOp::BitAnd => 5,
+        BinaryOp::Shl | BinaryOp::Shr => 4,
+        BinaryOp::Add | BinaryOp::Sub => 3,
+        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => 2,
+        BinaryOp::Pow => 1,
+    }
+}
+
+/// Creates a binary operator expression, respecting operator precedence.
+fn bin_op_expr(a: Expression, op: &Token, b: Expression) -> Expression {
+    let op = op.clone().into();
+    let op_level = prec_level(op);
+
+    match (a, b) {
+        (Expression::BinOp(a, x, b), Expression::BinOp(c, y, d)) => {
+            let x_level = prec_level(x);
+            let y_level = prec_level(y);
+
+            if x_level < op_level {
+                if y_level < op_level {
+                    //   op
+                    //  /  \
+                    // x    y
+                    Expression::BinOp(
+                        Box::new(Expression::BinOp(a, x, b)),
+                        op,
+                        Box::new(Expression::BinOp(c, y, d)),
+                    )
+                } else {
+                    //     y
+                    //    / \
+                    //   op  d
+                    //  /  \
+                    // x    c
+                    Expression::BinOp(
+                        Box::new(Expression::BinOp(
+                            Box::new(Expression::BinOp(a, x, b)),
+                            op,
+                            c,
+                        )),
+                        y,
+                        d,
+                    )
+                }
+            } else {
+                if y_level < op_level {
+                    //   x
+                    //  / \
+                    // a   op
+                    //    /  \
+                    //   b    y
+                    Expression::BinOp(
+                        a,
+                        x,
+                        Box::new(Expression::BinOp(
+                            b,
+                            op,
+                            Box::new(Expression::BinOp(c, y, d)),
+                        )),
+                    )
+                } else {
+                    //   x
+                    //  / \
+                    // a   y
+                    //    / \
+                    //  op   d
+                    Expression::BinOp(
+                        a,
+                        x,
+                        Box::new(Expression::BinOp(
+                            Box::new(Expression::BinOp(b, op, c)),
+                            y,
+                            d,
+                        )),
+                    )
+                }
+            }
+        }
+        (Expression::BinOp(a, x, b), e) => {
+            let x_level = prec_level(x);
+            if x_level < op_level {
+                //     op
+                //    /  \
+                //   x    e
+                //  / \
+                // a   b
+                Expression::BinOp(Box::new(Expression::BinOp(a, x, b)), op, Box::new(e))
+            } else {
+                //   x
+                //  / \
+                // a   op
+                //    /  \
+                //   b    e
+                Expression::BinOp(a, x, Box::new(Expression::BinOp(b, op, Box::new(e))))
+            }
+        }
+        (e, Expression::BinOp(c, y, d)) => {
+            let y_level = prec_level(y);
+            if y_level < op_level {
+                //   op
+                //  /  \
+                // e    y
+                //     / \
+                //    c   d
+                Expression::BinOp(Box::new(e), op, Box::new(Expression::BinOp(c, y, d)))
+            } else {
+                //      y
+                //     / \
+                //   op   d
+                //  /  \
+                // e    c
+                Expression::BinOp(Box::new(Expression::BinOp(Box::new(e), op, c)), y, d)
+            }
+        }
+        (e, f) => Expression::BinOp(Box::new(e), op.clone().into(), Box::new(f)),
+    }
+}
+
 sapphire_parser_gen::parser! {
     // Matches optional single-line whitespace.
     ws: () = { many0!(token!(Whitespace)) => () }
@@ -684,36 +814,11 @@ sapphire_parser_gen::parser! {
                 inclusive: t == &Token::P2Dots,
             }
         },
-        a: expression ws token!(Kor) wss b: expression => {
-            Expression::Or(Box::new(a), Box::new(b))
-        },
-        a: expression ws token!(Kand) wss b: expression => {
-            Expression::And(Box::new(a), Box::new(b))
-        },
-        a: expression ws t: token!(OEq, ONeq, OMatch, ONMatch, OCmp, OCaseEq,) wss
-            b: expression => {
-            Expression::BinOp(Box::new(a), t.clone().into(), Box::new(b))
-        },
-        a: expression ws t: token!(OGeq, OGt, OLeq, OLt,) wss b: expression => {
-            Expression::BinOp(Box::new(a), t.clone().into(), Box::new(b))
-        },
-        a: expression ws token!(OOr, OBitOr, OBitXor,) wss b: expression => {
-            Expression::Or(Box::new(a), Box::new(b))
-        },
-        a: expression ws token!(OAnd, OBitAnd,) wss b: expression => {
-            Expression::And(Box::new(a), Box::new(b))
-        },
-        a: expression ws t: token!(OShl, OShr,) wss b: expression => {
-            Expression::BinOp(Box::new(a), t.clone().into(), Box::new(b))
-        },
-        a: expression ws t: token!(OAdd, OSub,) wss b: expression => {
-            Expression::BinOp(Box::new(a), t.clone().into(), Box::new(b))
-        },
-        a: expression ws t: token!(OMul, ODiv, ORem,) wss b: expression => {
-            Expression::BinOp(Box::new(a), t.clone().into(), Box::new(b))
-        },
-        a: expression ws t: token!(OPow,) wss b: expression => {
-            Expression::BinOp(Box::new(a), t.clone().into(), Box::new(b))
+        a: expression ws t: token!(
+            Kor, Kand, OEq, ONeq, OMatch, ONMatch, OCmp, OCaseEq, OGeq, OGt, OLeq, OLt, OOr, OBitOr,
+            OBitXor, OAnd, OBitAnd, OShl, OShr, OAdd, OSub, OMul, ODiv, ORem, OPow,
+        ) wss b: expression => {
+            bin_op_expr(a, t, b)
         },
         e: expression ws token!(PDot, PDblColon,) wss i: method_name
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
