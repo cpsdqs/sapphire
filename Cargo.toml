@@ -9,6 +9,7 @@ name = "sapphire"
 path = "src/cli.rs"
 
 [dependencies]
+atty = "0.2"
 fnv = "1.0"
 parking_lot = "0.7"
 sapphire-parser = { path = "parser" }

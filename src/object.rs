@@ -1,11 +1,12 @@
 use crate::context::Context;
 use crate::heap::Ref;
 use crate::proc::Proc;
-use crate::symbol::Symbol;
+use crate::symbol::{Symbol, Symbols};
 use crate::value::Value;
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::any::Any;
+use std::mem;
 use std::sync::Arc;
 
 /// Object types.
@@ -134,6 +135,18 @@ impl Object for RbClass {
     fn object_type(&self) -> ObjectType {
         ObjectType::Class
     }
+    fn as_module(&self) -> Option<&Module> {
+        Some(self)
+    }
+    fn as_module_mut(&mut self) -> Option<&mut Module> {
+        Some(self)
+    }
+    fn as_class(&self) -> Option<&Class> {
+        Some(self)
+    }
+    fn as_class_mut(&mut self) -> Option<&mut Class> {
+        Some(self)
+    }
     fn class(&self, _: &Context) -> Ref<Object> {
         self.class.clone()
     }
@@ -171,4 +184,96 @@ impl Class for RbClass {
     fn superclass(&self, _: &Context) -> Ref<Object> {
         self.superclass.clone()
     }
+}
+
+/// A generic object.
+pub struct RbObject {
+    ivars: FnvHashMap<Symbol, Value>,
+    class: Ref<Object>,
+}
+
+impl RbObject {
+    pub fn new(class: Ref<Object>) -> RbObject {
+        RbObject {
+            ivars: FnvHashMap::default(),
+            class,
+        }
+    }
+}
+
+impl Object for RbObject {
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
+    }
+    fn object_type(&self) -> ObjectType {
+        ObjectType::Object
+    }
+    fn class(&self, _: &Context) -> Ref<Object> {
+        self.class.clone()
+    }
+    fn get_ivar(&self, name: Symbol) -> Option<Value> {
+        self.ivars.get(&name).map(|value| value.clone())
+    }
+    fn set_ivar(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
+        self.ivars.insert(name, value);
+        Ok(())
+    }
+}
+
+/// Creates the object class, class class, and module class.
+pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object>) {
+    let object_class: Ref<Object> = Ref::new(RbClass {
+        name: symbols.symbol("Object"),
+        class_vars: FnvHashMap::default(),
+        modules: SmallVec::new(),
+        methods: FnvHashMap::default(),
+        method_cache: FnvHashMap::default(),
+        class: unsafe { mem::uninitialized() },
+        superclass: unsafe { mem::uninitialized() },
+    });
+    let module_class: Ref<Object> = Ref::new(RbClass {
+        name: symbols.symbol("Module"),
+        class_vars: FnvHashMap::default(),
+        modules: SmallVec::new(),
+        methods: FnvHashMap::default(),
+        method_cache: FnvHashMap::default(),
+        class: unsafe { mem::uninitialized() },
+        superclass: object_class.clone(),
+    });
+    let class_class: Ref<Object> = Ref::new(RbClass {
+        name: symbols.symbol("Class"),
+        class_vars: FnvHashMap::default(),
+        modules: SmallVec::new(),
+        methods: FnvHashMap::default(),
+        method_cache: FnvHashMap::default(),
+        class: unsafe { mem::uninitialized() },
+        superclass: module_class.clone(),
+    });
+
+    let object_class_ref = object_class.clone();
+    let class_class_ref = class_class.clone();
+
+    {
+        let mut object_class_i = object_class.get();
+        let mut module_class_i = module_class.get();
+        let mut class_class_i = class_class.get();
+        let object_class = Object::downcast_mut::<RbClass>(&mut *object_class_i).unwrap();
+        let module_class = Object::downcast_mut::<RbClass>(&mut *module_class_i).unwrap();
+        let class_class = Object::downcast_mut::<RbClass>(&mut *class_class_i).unwrap();
+        mem::forget(mem::replace(
+            &mut object_class.class,
+            class_class_ref.clone(),
+        ));
+        mem::forget(mem::replace(&mut object_class.superclass, object_class_ref));
+        mem::forget(mem::replace(
+            &mut module_class.class,
+            class_class_ref.clone(),
+        ));
+        mem::forget(mem::replace(&mut class_class.class, class_class_ref));
+    }
+
+    (object_class, class_class, module_class)
 }

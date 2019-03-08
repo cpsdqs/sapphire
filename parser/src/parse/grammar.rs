@@ -664,7 +664,7 @@ sapphire_parser_gen::parser! {
     }
 
     expression: Expression = {
-        token!(PLParen) e: compound_statement token!(PRParen) => {
+        token!(PLParen) wss e: compound_statement wss token!(PRParen) => {
             if e.len() == 1 {
                 // unwrap expression if it’s just a single Statement::Expr
                 let mut e = e;

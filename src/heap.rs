@@ -11,6 +11,12 @@ impl Ref<Object> {
     }
 }
 
+impl<T> Ref<T> {
+    pub fn new_generic(this: T) -> Ref<T> {
+        Ref(Arc::new(Mutex::new(this)))
+    }
+}
+
 impl<T: ?Sized> Ref<T> {
     pub fn get(&self) -> MutexGuard<T> {
         self.0.lock()

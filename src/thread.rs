@@ -4,7 +4,7 @@ use crate::object::{Arguments, Object, RbClass};
 use crate::proc::{AddressingMode, Op, Proc, Static, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
-use smallvec::{Array, SmallVec};
+use smallvec::SmallVec;
 use std::mem;
 use std::sync::Arc;
 
@@ -30,16 +30,17 @@ impl Frame {
 
 pub struct Thread {
     context: Arc<Context>,
-    frames: Stack<[Frame; 1024]>,
-    pcs: Stack<[usize; 1024]>,
-    rescues: Stack<[usize; 1024]>,
-    out_vars: Stack<[usize; 1024]>,
-    modules: Stack<[Ref<Object>; 1024]>,
+    frames: Stack<Frame>,
+    pcs: Stack<usize>,
+    rescues: Stack<usize>,
+    out_vars: Stack<usize>,
+    modules: Stack<Ref<Object>>,
     pc: usize,
     arg_builder: ArgumentBuilder,
     args: Option<Arguments>,
 }
 
+#[derive(Debug)]
 pub enum ThreadError {
     StackOverflow,
     InvalidOperation,
@@ -51,15 +52,23 @@ impl Thread {
     pub fn new_empty(context: Arc<Context>) -> Thread {
         Thread {
             context,
-            frames: Stack::new(),
-            pcs: Stack::new(),
-            rescues: Stack::new(),
-            out_vars: Stack::new(),
-            modules: Stack::new(),
+            frames: Stack::new(1024),
+            pcs: Stack::new(1024),
+            rescues: Stack::new(1024),
+            out_vars: Stack::new(1024),
+            modules: Stack::new(1024),
             pc: 0,
             arg_builder: ArgumentBuilder::new(),
             args: None,
         }
+    }
+
+    pub fn new_root(context: Arc<Context>, proc: Arc<Proc>) -> Thread {
+        let mut thread = Thread::new_empty(context);
+        thread
+            .push_frame(proc, Value::Ref(thread.context.root().clone()), 0, None)
+            .unwrap();
+        thread
     }
 
     fn push_frame(
@@ -405,7 +414,9 @@ impl Thread {
         let value = self.read_addr()?;
         let value = self.frames.top().unwrap().register[value].clone();
         if let Some(out) = self.pop_frame() {
-            self.frames.top_mut().unwrap().register[out] = value;
+            if let Some(frame) = self.frames.top_mut() {
+                frame.register[out] = value;
+            }
         }
         Ok(())
     }
@@ -560,56 +571,36 @@ impl Iterator for Thread {
 }
 
 struct Stack<T> {
-    buf: T,
-    len: usize,
+    buf: Vec<T>,
+    max_len: usize,
 }
 
-impl<T: Array> Stack<T> {
-    fn new() -> Stack<T> {
+impl<T> Stack<T> {
+    fn new(max_len: usize) -> Stack<T> {
         Stack {
-            buf: unsafe { mem::uninitialized() },
-            len: 0,
+            buf: Vec::with_capacity(max_len),
+            max_len,
         }
     }
 
-    fn push(&mut self, item: T::Item) -> Result<(), ThreadError> {
-        if self.len == T::size() {
+    fn push(&mut self, item: T) -> Result<(), ThreadError> {
+        if self.buf.len() == self.max_len {
             return Err(ThreadError::StackOverflow);
         }
-        unsafe { *self.buf.ptr_mut().offset(self.len as isize) = item };
-        self.len += 1;
+        self.buf.push(item);
         Ok(())
     }
 
-    fn pop(&mut self) -> Option<T::Item> {
-        if self.len > 0 {
-            self.len -= 1;
-            let item = unsafe {
-                mem::replace(
-                    &mut *self.buf.ptr_mut().offset(self.len as isize),
-                    mem::uninitialized(),
-                )
-            };
-            Some(item)
-        } else {
-            None
-        }
+    fn pop(&mut self) -> Option<T> {
+        self.buf.pop()
     }
 
-    fn top(&self) -> Option<&T::Item> {
-        if self.len > 0 {
-            unsafe { Some(&*self.buf.ptr().offset(self.len as isize - 1)) }
-        } else {
-            None
-        }
+    fn top(&self) -> Option<&T> {
+        self.buf.last()
     }
 
-    fn top_mut(&mut self) -> Option<&mut T::Item> {
-        if self.len > 0 {
-            unsafe { Some(&mut *self.buf.ptr_mut().offset(self.len as isize - 1)) }
-        } else {
-            None
-        }
+    fn top_mut(&mut self) -> Option<&mut T> {
+        self.buf.last_mut()
     }
 }
 
