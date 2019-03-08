@@ -210,6 +210,8 @@ impl<'input> From<Token<'input>> for BinaryOp {
             Token::OMul => BinaryOp::Mul,
             Token::ODiv => BinaryOp::Div,
             Token::ORem => BinaryOp::Rem,
+            Token::Kor => BinaryOp::KeywordOr,
+            Token::Kand => BinaryOp::KeywordAnd,
             token => panic!(
                 "don’t know how to turn {:?} into a binary operation",
                 token

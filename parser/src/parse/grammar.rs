@@ -481,6 +481,7 @@ pub fn program(mut i: Cursor) -> IResult<StatementList> {
     Ok((i, statements))
 }
 
+const MAX_PREC_LEVEL: usize = 10;
 fn prec_level(op: BinaryOp) -> usize {
     match op {
         BinaryOp::KeywordOr => 10,
@@ -498,116 +499,6 @@ fn prec_level(op: BinaryOp) -> usize {
         BinaryOp::Add | BinaryOp::Sub => 3,
         BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => 2,
         BinaryOp::Pow => 1,
-    }
-}
-
-/// Creates a binary operator expression, respecting operator precedence.
-fn bin_op_expr(a: Expression, op: &Token, b: Expression) -> Expression {
-    let op = op.clone().into();
-    let op_level = prec_level(op);
-
-    match (a, b) {
-        (Expression::BinOp(a, x, b), Expression::BinOp(c, y, d)) => {
-            let x_level = prec_level(x);
-            let y_level = prec_level(y);
-
-            if x_level < op_level {
-                if y_level < op_level {
-                    //   op
-                    //  /  \
-                    // x    y
-                    Expression::BinOp(
-                        Box::new(Expression::BinOp(a, x, b)),
-                        op,
-                        Box::new(Expression::BinOp(c, y, d)),
-                    )
-                } else {
-                    //     y
-                    //    / \
-                    //   op  d
-                    //  /  \
-                    // x    c
-                    Expression::BinOp(
-                        Box::new(Expression::BinOp(
-                            Box::new(Expression::BinOp(a, x, b)),
-                            op,
-                            c,
-                        )),
-                        y,
-                        d,
-                    )
-                }
-            } else {
-                if y_level < op_level {
-                    //   x
-                    //  / \
-                    // a   op
-                    //    /  \
-                    //   b    y
-                    Expression::BinOp(
-                        a,
-                        x,
-                        Box::new(Expression::BinOp(
-                            b,
-                            op,
-                            Box::new(Expression::BinOp(c, y, d)),
-                        )),
-                    )
-                } else {
-                    //   x
-                    //  / \
-                    // a   y
-                    //    / \
-                    //  op   d
-                    Expression::BinOp(
-                        a,
-                        x,
-                        Box::new(Expression::BinOp(
-                            Box::new(Expression::BinOp(b, op, c)),
-                            y,
-                            d,
-                        )),
-                    )
-                }
-            }
-        }
-        (Expression::BinOp(a, x, b), e) => {
-            let x_level = prec_level(x);
-            if x_level < op_level {
-                //     op
-                //    /  \
-                //   x    e
-                //  / \
-                // a   b
-                Expression::BinOp(Box::new(Expression::BinOp(a, x, b)), op, Box::new(e))
-            } else {
-                //   x
-                //  / \
-                // a   op
-                //    /  \
-                //   b    e
-                Expression::BinOp(a, x, Box::new(Expression::BinOp(b, op, Box::new(e))))
-            }
-        }
-        (e, Expression::BinOp(c, y, d)) => {
-            let y_level = prec_level(y);
-            if y_level < op_level {
-                //   op
-                //  /  \
-                // e    y
-                //     / \
-                //    c   d
-                Expression::BinOp(Box::new(e), op, Box::new(Expression::BinOp(c, y, d)))
-            } else {
-                //      y
-                //     / \
-                //   op   d
-                //  /  \
-                // e    c
-                Expression::BinOp(Box::new(Expression::BinOp(Box::new(e), op, c)), y, d)
-            }
-        }
-        (e, f) => Expression::BinOp(Box::new(e), op.clone().into(), Box::new(f)),
     }
 }
 
@@ -815,10 +706,60 @@ sapphire_parser_gen::parser! {
             }
         },
         a: expression ws t: token!(
-            Kor, Kand, OEq, ONeq, OMatch, ONMatch, OCmp, OCaseEq, OGeq, OGt, OLeq, OLt, OOr, OBitOr,
-            OBitXor, OAnd, OBitAnd, OShl, OShr, OAdd, OSub, OMul, ODiv, ORem, OPow,
+                Kor, Kand, OEq, ONeq, OMatch, ONMatch, OCmp, OCaseEq, OGeq, OGt, OLeq, OLt, OOr,
+                OBitOr, OBitXor, OAnd, OBitAnd, OShl, OShr, OAdd, OSub, OMul, ODiv, ORem, OPow,
         ) wss b: expression => {
-            bin_op_expr(a, t, b)
+            #[derive(Debug)]
+            enum Item {
+                Expr(Expression),
+                Op(BinaryOp),
+            }
+            fn flatten_expr(expr: Expression) -> Vec<Item> {
+                match expr {
+                    Expression::BinOp(a, op, b) => {
+                        flatten_expr(*a).into_iter()
+                            .chain(iter::once(Item::Op(op)))
+                            .chain(flatten_expr(*b).into_iter())
+                            .collect()
+                    }
+                    e => vec![Item::Expr(e)],
+                }
+            }
+
+            let mut items: Vec<_> = flatten_expr(b);
+            items.insert(0, Item::Expr(a));
+            items.insert(1, Item::Op(t.clone().into()));
+
+            for level in 0..=MAX_PREC_LEVEL {
+                let mut i = 0;
+                while i < items.len() {
+                    match items[i] {
+                        Item::Op(op) if prec_level(op) == level => {
+                            let prev = items.remove(i - 1);
+                            i -= 1;
+                            let next = items.remove(i + 1);
+
+                            if let (Item::Expr(prev), Item::Expr(next)) = (prev, next) {
+                                items[i] = Item::Expr(Expression::BinOp(
+                                    Box::new(prev),
+                                    op,
+                                    Box::new(next),
+                                ));
+                                i += 1;
+                            } else {
+                                panic!("binary operation does not have expressions on either side");
+                            }
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+
+            assert_eq!(items.len(), 1, "binary operation was not reduced to one expression");
+            match items.remove(0) {
+                Item::Expr(e) => e,
+                _ => panic!("binary operation was reduced to an operator somehow")
+            }
         },
         e: expression ws token!(PDot, PDblColon,) wss i: method_name
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
