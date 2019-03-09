@@ -411,6 +411,7 @@ impl IRProc {
             mode,
             code,
             params,
+            parent_registers: Vec::new(),
         }
     }
 }

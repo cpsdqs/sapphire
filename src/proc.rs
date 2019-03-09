@@ -4,6 +4,7 @@ use crate::context::Context;
 use crate::heap::Ref;
 use crate::object::{Object, ObjectType};
 use crate::symbol::Symbol;
+use crate::thread::Register;
 use crate::value::Value;
 use smallvec::SmallVec;
 use std::any::Any;
@@ -30,6 +31,22 @@ pub struct Proc {
     pub code: Vec<u8>,
     /// Parameters.
     pub params: Params,
+    /// Parent registers, if this is a block.
+    pub(crate) parent_registers: Vec<Register>,
+}
+
+impl Proc {
+    pub(crate) fn clone_with_parents(&self, parents: Vec<Register>) -> Proc {
+        Proc {
+            name: self.name,
+            registers: self.registers,
+            statics: self.statics.clone(),
+            mode: self.mode,
+            code: self.code.clone(),
+            params: self.params.clone(),
+            parent_registers: parents,
+        }
+    }
 }
 
 impl fmt::Debug for Proc {

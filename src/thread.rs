@@ -4,14 +4,60 @@ use crate::object::{Arguments, Object, RbClass};
 use crate::proc::{AddressingMode, Op, Proc, Static, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
+use parking_lot::MutexGuard;
 use smallvec::SmallVec;
 use std::mem;
+use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 
 #[derive(Debug)]
 struct Frame {
     proc: Arc<Proc>,
-    register: SmallVec<[Value; 256]>,
+    register: Register,
+}
+
+type RegisterInner = SmallVec<[Value; 256]>;
+#[derive(Debug, Clone)]
+pub(crate) enum Register {
+    Local(RegisterInner),
+    Detached(Ref<RegisterInner>),
+}
+enum RegisterMut<'a> {
+    Local(&'a mut RegisterInner),
+    Detached(MutexGuard<'a, RegisterInner>),
+}
+impl<'a> Deref for RegisterMut<'a> {
+    type Target = RegisterInner;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            RegisterMut::Local(r) => *r,
+            RegisterMut::Detached(r) => &*r,
+        }
+    }
+}
+impl<'a> DerefMut for RegisterMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            RegisterMut::Local(r) => *r,
+            RegisterMut::Detached(r) => &mut *r,
+        }
+    }
+}
+impl<'a> Index<usize> for RegisterMut<'a> {
+    type Output = Value;
+    fn index(&self, index: usize) -> &Self::Output {
+        self.deref().index(index)
+    }
+}
+impl<'a> IndexMut<usize> for RegisterMut<'a> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.deref_mut().index_mut(index)
+    }
+}
+impl PartialEq for Register {
+    fn eq(&self, _: &Register) -> bool {
+        false
+    }
 }
 
 impl Frame {
@@ -21,11 +67,35 @@ impl Frame {
             register.push(Value::Nil);
         }
         register[SELF] = current_self;
-        Frame { register, proc }
+        Frame {
+            register: Register::Local(register),
+            proc,
+        }
     }
 
-    fn current_self(&self) -> &Value {
-        &self.register[SELF]
+    fn register_mut(&mut self) -> RegisterMut {
+        match &mut self.register {
+            Register::Local(register) => RegisterMut::Local(register),
+            Register::Detached(register) => RegisterMut::Detached(register.get()),
+        }
+    }
+
+    fn detach_register(&mut self) -> Register {
+        match &self.register {
+            Register::Local(..) => {
+                let register = mem::replace(&mut self.register, unsafe { mem::uninitialized() });
+                if let Register::Local(register) = register {
+                    mem::forget(mem::replace(
+                        &mut self.register,
+                        Register::Detached(Ref::new_generic(register)),
+                    ));
+                    self.register.clone()
+                } else {
+                    unreachable!()
+                }
+            }
+            Register::Detached(..) => self.register.clone(),
+        }
     }
 }
 
@@ -198,20 +268,20 @@ impl Thread {
     #[inline]
     fn op_load_root(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
-        self.frames.top_mut().unwrap().register[out] =
+        self.frames.top_mut().unwrap().register_mut()[out] =
             Value::Ref(self.context.object_class().clone());
         Ok(())
     }
     #[inline]
     fn op_load_true(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
-        self.frames.top_mut().unwrap().register[out] = Value::Bool(true);
+        self.frames.top_mut().unwrap().register_mut()[out] = Value::Bool(true);
         Ok(())
     }
     #[inline]
     fn op_load_false(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
-        self.frames.top_mut().unwrap().register[out] = Value::Bool(false);
+        self.frames.top_mut().unwrap().register_mut()[out] = Value::Bool(false);
         Ok(())
     }
     #[inline]
@@ -219,8 +289,8 @@ impl Thread {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
         match self.context.globals().get().get(&name) {
-            Some(value) => self.frames.top_mut().unwrap().register[out] = value.clone(),
-            None => self.frames.top_mut().unwrap().register[out] = Value::Nil,
+            Some(value) => self.frames.top_mut().unwrap().register_mut()[out] = value.clone(),
+            None => self.frames.top_mut().unwrap().register_mut()[out] = Value::Nil,
         }
         Ok(())
     }
@@ -229,7 +299,7 @@ impl Thread {
         let out = self.read_addr()?;
         let parent = self.read_addr()?;
         let name = self.read_symbol()?;
-        let register = &mut self.frames.top_mut().unwrap().register;
+        let register = &mut self.frames.top_mut().unwrap().register_mut();
         if parent == SELF {
             match self
                 .modules
@@ -240,8 +310,8 @@ impl Thread {
                 .expect("Item in module stack is not a module")
                 .get_const(name)
             {
-                Some(value) => self.frames.top_mut().unwrap().register[out] = value,
-                None => self.frames.top_mut().unwrap().register[out] = Value::Nil,
+                Some(value) => register[out] = value,
+                None => register[out] = Value::Nil,
             }
         } else {
             let value = if let Some(module) = register[parent].as_module() {
@@ -261,15 +331,10 @@ impl Thread {
     fn op_load_class_var(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
-        let frame = self.frames.top_mut().unwrap();
-        match frame
-            .current_self()
-            .class(&self.context)
-            .get()
-            .get_ivar(name)
-        {
-            Some(value) => frame.register[out] = value,
-            None => frame.register[out] = Value::Nil,
+        let mut register = self.frames.top_mut().unwrap().register_mut();
+        match register[SELF].class(&self.context).get().get_ivar(name) {
+            Some(value) => register[out] = value,
+            None => register[out] = Value::Nil,
         }
         Ok(())
     }
@@ -277,10 +342,10 @@ impl Thread {
     fn op_load_ivar(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
-        let frame = self.frames.top_mut().unwrap();
-        match frame.current_self().get_ivar(name) {
-            Some(value) => frame.register[out] = value,
-            None => frame.register[out] = Value::Nil,
+        let mut register = self.frames.top_mut().unwrap().register_mut();
+        match register[SELF].get_ivar(name) {
+            Some(value) => register[out] = value,
+            None => register[out] = Value::Nil,
         }
         Ok(())
     }
@@ -289,7 +354,7 @@ impl Thread {
         let out = self.read_addr()?;
         match self.read_static()? {
             Static::Str(string) => {
-                self.frames.top_mut().unwrap().register[out] = Value::String(string.clone())
+                self.frames.top_mut().unwrap().register_mut()[out] = Value::String(string.clone())
             }
             _ => return Err(ThreadError::InvalidStatic),
         }
@@ -299,7 +364,7 @@ impl Thread {
     fn op_append_string(&mut self) -> Result<(), ThreadError> {
         let recv = self.read_addr()?;
         let append = self.read_addr()?;
-        let register = &mut self.frames.top_mut().unwrap().register;
+        let register = &mut self.frames.top_mut().unwrap().register_mut();
         let append = match &register[append] {
             Value::String(append) => append.clone(),
             _ => unimplemented!("stringify"),
@@ -314,7 +379,7 @@ impl Thread {
     fn op_load_symbol(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
         let sym = self.read_symbol()?;
-        self.frames.top_mut().unwrap().register[out] = Value::Symbol(sym);
+        self.frames.top_mut().unwrap().register_mut()[out] = Value::Symbol(sym);
         Ok(())
     }
     #[inline]
@@ -322,7 +387,7 @@ impl Thread {
         let out = self.read_addr()?;
         match self.read_static()? {
             Static::Int(value) => {
-                self.frames.top_mut().unwrap().register[out] = Value::Fixnum(*value);
+                self.frames.top_mut().unwrap().register_mut()[out] = Value::Fixnum(*value);
                 Ok(())
             }
             _ => Err(ThreadError::InvalidStatic),
@@ -333,7 +398,7 @@ impl Thread {
         let out = self.read_addr()?;
         match self.read_static()? {
             Static::Float(value) => {
-                self.frames.top_mut().unwrap().register[out] = Value::Float(*value);
+                self.frames.top_mut().unwrap().register_mut()[out] = Value::Float(*value);
                 Ok(())
             }
             _ => Err(ThreadError::InvalidStatic),
@@ -342,9 +407,14 @@ impl Thread {
     #[inline]
     fn op_load_block(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
+        let frame = self.frames.top_mut().unwrap();
+        let register = frame.detach_register();
+        let mut parent_registers = frame.proc.parent_registers.clone();
+        parent_registers.push(register);
         match self.read_static()? {
             Static::Proc(value) => {
-                self.frames.top_mut().unwrap().register[out] = Value::Proc(Arc::clone(value));
+                let proc = value.clone_with_parents(parent_registers);
+                self.frames.top_mut().unwrap().register_mut()[out] = Value::Proc(Arc::new(proc));
                 Ok(())
             }
             _ => Err(ThreadError::InvalidStatic),
@@ -358,14 +428,14 @@ impl Thread {
     fn op_arg(&mut self) -> Result<(), ThreadError> {
         let var = self.read_addr()?;
         self.arg_builder
-            .push_arg(self.frames.top().unwrap().register[var].clone());
+            .push_arg(self.frames.top_mut().unwrap().register_mut()[var].clone());
         Ok(())
     }
     #[inline]
     fn op_arg_assoc(&mut self) -> Result<(), ThreadError> {
         let key = self.read_addr()?;
         let value = self.read_addr()?;
-        let register = &self.frames.top().unwrap().register;
+        let register = &self.frames.top_mut().unwrap().register_mut();
         self.arg_builder
             .push_hash(register[key].clone(), register[value].clone());
         Ok(())
@@ -374,7 +444,7 @@ impl Thread {
     fn op_arg_block(&mut self) -> Result<(), ThreadError> {
         let var = self.read_addr()?;
         self.arg_builder
-            .push_block(self.frames.top().unwrap().register[var].clone());
+            .push_block(self.frames.top_mut().unwrap().register_mut()[var].clone());
         Ok(())
     }
     #[inline]
@@ -382,7 +452,7 @@ impl Thread {
         let args = self.arg_builder.flush(); // TODO: pass args?
         let out = self.read_addr()?;
         let recv = self.read_addr()?;
-        let recv = self.frames.top().unwrap().register[recv].clone();
+        let recv = self.frames.top_mut().unwrap().register_mut()[recv].clone();
         let method = self.read_symbol()?;
         let resolved = recv
             .class(&self.context)
@@ -404,7 +474,7 @@ impl Thread {
     fn op_not(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
         let value = self.read_addr()?;
-        let register = &mut self.frames.top_mut().unwrap().register;
+        let register = &mut self.frames.top_mut().unwrap().register_mut();
         register[out] = Value::Bool(register[value].is_truthy());
         Ok(())
     }
@@ -417,7 +487,7 @@ impl Thread {
     fn op_jump_if(&mut self) -> Result<(), ThreadError> {
         let cond = self.read_addr()?;
         let jump = self.read_addr()?;
-        if self.frames.top().unwrap().register[cond].is_truthy() {
+        if self.frames.top_mut().unwrap().register_mut()[cond].is_truthy() {
             self.pc = jump;
         }
         Ok(())
@@ -426,7 +496,7 @@ impl Thread {
     fn op_jump_if_not(&mut self) -> Result<(), ThreadError> {
         let cond = self.read_addr()?;
         let jump = self.read_addr()?;
-        if !self.frames.top().unwrap().register[cond].is_truthy() {
+        if !self.frames.top_mut().unwrap().register_mut()[cond].is_truthy() {
             self.pc = jump;
         }
         Ok(())
@@ -434,10 +504,10 @@ impl Thread {
     #[inline]
     fn op_return(&mut self) -> Result<(), ThreadError> {
         let value = self.read_addr()?;
-        let value = self.frames.top().unwrap().register[value].clone();
+        let value = self.frames.top_mut().unwrap().register_mut()[value].clone();
         if let Some(out) = self.pop_frame() {
             if let Some(frame) = self.frames.top_mut() {
-                frame.register[out] = value;
+                frame.register_mut()[out] = value;
             }
         }
         Ok(())
@@ -446,7 +516,7 @@ impl Thread {
     fn op_assign(&mut self) -> Result<(), ThreadError> {
         let recv = self.read_addr()?;
         let value = self.read_addr()?;
-        let register = &mut self.frames.top_mut().unwrap().register;
+        let register = &mut self.frames.top_mut().unwrap().register_mut();
         register[recv] = register[value].clone();
         Ok(())
     }
@@ -454,7 +524,7 @@ impl Thread {
     fn op_assign_global(&mut self) -> Result<(), ThreadError> {
         let name = self.read_symbol()?;
         let value = self.read_addr()?;
-        let value = self.frames.top().unwrap().register[value].clone();
+        let value = self.frames.top_mut().unwrap().register_mut()[value].clone();
         self.context.globals().get().insert(name, value);
         Ok(())
     }
@@ -515,7 +585,7 @@ impl Thread {
         let parent = self.read_addr()?;
         let name = self.read_symbol()?;
         let superclass = self.read_addr()?;
-        let superclass = match &self.frames.top().unwrap().register[superclass] {
+        let superclass = match &self.frames.top_mut().unwrap().register_mut()[superclass] {
             Value::Ref(r) => {
                 if let Some(_) = r.get().as_class() {
                     r.clone()
@@ -539,7 +609,7 @@ impl Thread {
                 .unwrap()
                 .set_const(name, module.clone())
         } else if let Some(mut parent) =
-            self.frames.top_mut().unwrap().register[parent].as_module_mut()
+            self.frames.top_mut().unwrap().register_mut()[parent].as_module_mut()
         {
             parent.set_const(name, module.clone())
         } else {
