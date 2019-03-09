@@ -102,12 +102,16 @@ pub trait Object: Send {
 }
 
 /// A module object.
-pub trait Module: Send {
+pub trait Module: Object {
     /// Returns a constant.
-    fn get_const(&self, name: Symbol) -> Option<Value>;
+    fn get_const(&self, name: Symbol) -> Option<Value> {
+        self.get_ivar(name)
+    }
 
     /// Attempts to set a constant.
-    fn set_const(&mut self, name: Symbol, value: Value) -> Result<(), ()>;
+    fn set_const(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
+        self.set_ivar(name, value)
+    }
 
     /// Defines a method on this module.
     fn def_method(&mut self, name: Symbol, body: Arc<Proc>) -> Result<(), ()>;
@@ -200,6 +204,9 @@ impl Object for RbClass {
         self.class_vars.insert(name, value);
         Ok(())
     }
+    fn inspect(&self, context: &Context) -> String {
+        format!("<Class:{}>", context.symbols().symbol_name(self.name).unwrap_or("?"))
+    }
 }
 
 impl Module for RbClass {
@@ -214,8 +221,20 @@ impl Module for RbClass {
         self.methods.insert(name, body);
         Ok(())
     }
-    fn resolve_method(&mut self, _name: Symbol) -> Option<Arc<Proc>> {
-        unimplemented!("resolve method")
+    fn resolve_method(&mut self, name: Symbol) -> Option<Arc<Proc>> {
+        if let Some(proc) = self.method_cache.get(&name) {
+            return Some(Arc::clone(proc));
+        }
+        let out = if let Some(proc) = self.methods.get(&name) {
+            Some(Arc::clone(proc))
+        } else {
+            eprintln!("TODO: resolve method");
+            None
+        };
+        if let Some(out) = &out {
+            self.method_cache.insert(name, Arc::clone(out));
+        }
+        out
     }
     fn include_module(&mut self, module: Ref<Object>) -> Result<(), ()> {
         self.modules.push(module);

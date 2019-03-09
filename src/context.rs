@@ -2,6 +2,7 @@ use crate::heap::Ref;
 use crate::object::{init_root, Object, RbObject};
 use crate::symbol::{Symbol, Symbols};
 use crate::value::Value;
+use crate::numeric::FixnumClass;
 use fnv::FnvHashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -27,6 +28,7 @@ impl Context {
     pub fn new() -> Context {
         let mut symbols = Symbols::new();
         let (object_class, class_class, module_class) = init_root(&mut symbols);
+        let fixnum_class = Ref::new(FixnumClass::new());
 
         Context {
             symbols: RwLock::new(symbols),
@@ -34,7 +36,7 @@ impl Context {
             root: Ref::new(RbObject::new(object_class.clone())),
             nil_class: object_class.clone(),    // TODO
             bool_class: object_class.clone(),   // TODO
-            fixnum_class: object_class.clone(), // TODO
+            fixnum_class,
             float_class: object_class.clone(),  // TODO
             symbol_class: object_class.clone(), // TODO
             string_class: object_class.clone(), // TODO

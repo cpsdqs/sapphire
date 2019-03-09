@@ -30,6 +30,57 @@ impl Object for Symbol {
     }
 }
 
+macro_rules! def_common_symbols {
+    ($name:ident = $str:expr, $($rest:tt)+) => {
+        impl Symbol {
+            pub const $name: Symbol = Symbol(0);
+            def_common_symbols!(__def_consts 1, $($rest)+);
+        }
+
+        macro_rules! init_symbol_table {
+            ($table:expr) => {
+                $table.insert($str.to_string(), Symbol(0));
+                def_common_symbols!(__def_table 1, $table, $($rest)+);
+            }
+        }
+    };
+    (__def_consts $c:expr, $name:ident = $str:expr, $($rest:tt)+) => {
+        pub const $name: usize = $c;
+        def_common_symbols!(__def_consts $c + 1, $($rest)+);
+    };
+    (__def_consts $c:expr, $name:ident = $str:expr,) => {
+        pub const $name: usize = $c;
+    };
+    (__def_table $c:expr, $table:expr, $name:ident = $str:expr, $($rest:tt)+) => {
+        $table.insert($str.to_string(), Symbol($c));
+        def_common_symbols!(__def_table $c + 1, $table, $($rest)+)
+    };
+    (__def_table $c:expr, $table:expr, $name:ident = $str:expr,) => {
+        $table.insert($str.to_string(), Symbol($c));
+    };
+}
+
+def_common_symbols! {
+    ADD = "+",
+    SUB = "-",
+    MUL = "*",
+    DIV = "/",
+    REM = "%",
+    UPLUS = "+@",
+    UMINUS = "-@",
+    EQ = "==",
+    CASE_EQ = "===",
+    NEQ = "!=",
+    MATCH = "=~",
+    NMATCH = "!~",
+    SHL = "<<",
+    SHR = ">>",
+    GEQ = ">=",
+    LEQ = "<=",
+    GT = ">",
+    LT = "<",
+}
+
 /// A symbol table.
 #[derive(Debug)]
 pub struct Symbols {
@@ -38,9 +89,9 @@ pub struct Symbols {
 
 impl Symbols {
     pub fn new() -> Symbols {
-        Symbols {
-            table: HashMap::new(),
-        }
+        let mut table = HashMap::new();
+        init_symbol_table!(table);
+        Symbols { table }
     }
 
     /// Returns the symbol with the given name.

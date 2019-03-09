@@ -346,7 +346,7 @@ impl<'input> From<UnsignedNumeric<'input>> for NumericValue {
             Float(int, dec) => NumericValue::Float {
                 decimal: (int.into(), dec.into()),
                 exp_positive: true,
-                exp: "1".into(),
+                exp: "0".into(),
             },
         }
     }
