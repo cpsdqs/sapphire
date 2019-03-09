@@ -1,12 +1,12 @@
 use crate::context::Context;
 use crate::heap::Ref;
-use crate::object::{Object, ObjectType};
+use crate::object::{Class, Module, Object, ObjectRef, ObjectRefMut, ObjectType};
 use crate::proc::Proc;
 use crate::symbol::Symbol;
 use std::any::Any;
 use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Nil,
     Bool(bool),
@@ -33,6 +33,82 @@ impl Object for Value {
     }
     fn as_any_mut(&mut self) -> &mut Any {
         self
+    }
+    fn as_module(&self) -> Option<ObjectRef<Module>> {
+        match self {
+            Value::Nil => ().as_module(),
+            Value::Bool(b) => b.as_module(),
+            Value::Fixnum(i) => i.as_module(),
+            Value::Float(f) => f.as_module(),
+            Value::Symbol(s) => s.as_module(),
+            Value::String(s) => s.as_module(),
+            Value::Proc(p) => p.as_module(),
+            Value::Ref(o) => {
+                let obj = o.get();
+                if obj.as_module().is_some() {
+                    Some(ObjectRef::Guard(obj))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+    fn as_module_mut(&mut self) -> Option<ObjectRefMut<Module>> {
+        match self {
+            Value::Nil => None,
+            Value::Bool(b) => b.as_module_mut(),
+            Value::Fixnum(i) => i.as_module_mut(),
+            Value::Float(f) => f.as_module_mut(),
+            Value::Symbol(s) => s.as_module_mut(),
+            Value::String(s) => s.as_module_mut(),
+            Value::Proc(p) => p.as_module_mut(),
+            Value::Ref(o) => {
+                let obj = o.get();
+                if obj.as_module().is_some() {
+                    Some(ObjectRefMut::Guard(obj))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+    fn as_class(&self) -> Option<ObjectRef<Class>> {
+        match self {
+            Value::Nil => ().as_class(),
+            Value::Bool(b) => b.as_class(),
+            Value::Fixnum(i) => i.as_class(),
+            Value::Float(f) => f.as_class(),
+            Value::Symbol(s) => s.as_class(),
+            Value::String(s) => s.as_class(),
+            Value::Proc(p) => p.as_class(),
+            Value::Ref(o) => {
+                let obj = o.get();
+                if obj.as_class().is_some() {
+                    Some(ObjectRef::Guard(obj))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+    fn as_class_mut(&mut self) -> Option<ObjectRefMut<Class>> {
+        match self {
+            Value::Nil => None,
+            Value::Bool(b) => b.as_class_mut(),
+            Value::Fixnum(i) => i.as_class_mut(),
+            Value::Float(f) => f.as_class_mut(),
+            Value::Symbol(s) => s.as_class_mut(),
+            Value::String(s) => s.as_class_mut(),
+            Value::Proc(p) => p.as_class_mut(),
+            Value::Ref(o) => {
+                let obj = o.get();
+                if obj.as_class().is_some() {
+                    Some(ObjectRefMut::Guard(obj))
+                } else {
+                    None
+                }
+            }
+        }
     }
     fn object_type(&self) -> ObjectType {
         match self {

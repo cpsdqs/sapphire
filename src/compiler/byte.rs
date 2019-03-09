@@ -4,6 +4,7 @@ use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
+#[derive(Debug)]
 enum Chunk {
     Byte(u8),
     Label(usize),
@@ -22,8 +23,7 @@ impl IRProc {
         let mut labels = FnvHashMap::default();
 
         let mut register_count = RESERVED_REGISTERS;
-        let mut i = 0;
-        for op in &mut self.items {
+        for (i, op) in self.items.iter_mut().enumerate() {
             op.for_each_var(|var, _| match var {
                 Var::Local(i) => {
                     registers.entry(*i).or_insert_with(|| {
@@ -39,7 +39,7 @@ impl IRProc {
                 IROp::Label(label) => {
                     labels.insert(*label, i);
                 }
-                _ => i += 1,
+                _ => (),
             }
         }
 
@@ -100,8 +100,8 @@ impl IRProc {
             };
         }
 
-        for (i, op) in self.items.into_iter().enumerate() {
-            op_offsets.insert(i, code_len);
+        for op in self.items {
+            op_offsets.push(code_len);
             code_len += 1;
             match op {
                 IROp::LoadRoot(var) => {
@@ -204,7 +204,6 @@ impl IRProc {
                     addr_var!(out);
                     addr_var!(value);
                 }
-                IROp::Label(_) => (),
                 IROp::Jump(label) => {
                     code.push(Chunk::Byte(Op::JUMP));
                     push_label!(label);
@@ -327,7 +326,7 @@ impl IRProc {
                     addr_var!(var);
                     push_label!(label);
                 }
-                IROp::Param(_) => (),
+                IROp::Label(_) | IROp::Param(_) => code_len -= 1,
             }
         }
 

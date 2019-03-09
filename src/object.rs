@@ -4,9 +4,11 @@ use crate::proc::Proc;
 use crate::symbol::{Symbol, Symbols};
 use crate::value::Value;
 use fnv::FnvHashMap;
+use parking_lot::MutexGuard;
 use smallvec::SmallVec;
 use std::any::Any;
 use std::mem;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 /// Object types.
@@ -21,6 +23,46 @@ pub enum ObjectType {
     Module,
 }
 
+pub enum ObjectRef<'a, T: ?Sized> {
+    Ref(&'a T),
+    Guard(MutexGuard<'a, Object>),
+}
+pub enum ObjectRefMut<'a, T: ?Sized> {
+    Ref(&'a mut T),
+    Guard(MutexGuard<'a, Object>),
+}
+macro_rules! impl_object_ref {
+    ($o:ident, $t:tt, $f:ident) => {
+        impl<'a> Deref for $o<'a, dyn $t> {
+            type Target = dyn $t;
+            fn deref(&self) -> &Self::Target {
+                match self {
+                    $o::Ref(r) => *r,
+                    $o::Guard(r) => unsafe { mem::transmute::<&$t, &$t>(&*r.$f().unwrap()) },
+                }
+            }
+        }
+    };
+    (mut $o:ident, $t:tt, $f:ident) => {
+        impl<'a> DerefMut for $o<'a, dyn $t> {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                match self {
+                    $o::Ref(r) => *r,
+                    $o::Guard(r) => unsafe {
+                        mem::transmute::<&mut $t, &mut $t>(&mut *r.$f().unwrap())
+                    },
+                }
+            }
+        }
+    };
+}
+impl_object_ref!(ObjectRef, Module, as_module);
+impl_object_ref!(ObjectRef, Class, as_class);
+impl_object_ref!(ObjectRefMut, Module, as_module);
+impl_object_ref!(ObjectRefMut, Class, as_class);
+impl_object_ref!(mut ObjectRefMut, Module, as_module_mut);
+impl_object_ref!(mut ObjectRefMut, Class, as_class_mut);
+
 /// An object.
 pub trait Object: Send {
     /// Helper method for downcasting.
@@ -29,16 +71,16 @@ pub trait Object: Send {
     /// Helper method for downcasting.
     fn as_any_mut(&mut self) -> &mut Any;
 
-    fn as_module(&self) -> Option<&Module> {
+    fn as_module(&self) -> Option<ObjectRef<Module>> {
         None
     }
-    fn as_module_mut(&mut self) -> Option<&mut Module> {
+    fn as_module_mut(&mut self) -> Option<ObjectRefMut<Module>> {
         None
     }
-    fn as_class(&self) -> Option<&Class> {
+    fn as_class(&self) -> Option<ObjectRef<Class>> {
         None
     }
-    fn as_class_mut(&mut self) -> Option<&mut Class> {
+    fn as_class_mut(&mut self) -> Option<ObjectRefMut<Class>> {
         None
     }
 
@@ -95,6 +137,7 @@ impl Object {
 }
 
 /// Method call arguments.
+#[derive(Debug)]
 pub struct Arguments {
     pub args: SmallVec<[Value; 32]>,
     pub block: Option<Value>,
@@ -135,17 +178,17 @@ impl Object for RbClass {
     fn object_type(&self) -> ObjectType {
         ObjectType::Class
     }
-    fn as_module(&self) -> Option<&Module> {
-        Some(self)
+    fn as_module(&self) -> Option<ObjectRef<Module>> {
+        Some(ObjectRef::Ref(self))
     }
-    fn as_module_mut(&mut self) -> Option<&mut Module> {
-        Some(self)
+    fn as_module_mut(&mut self) -> Option<ObjectRefMut<Module>> {
+        Some(ObjectRefMut::Ref(self))
     }
-    fn as_class(&self) -> Option<&Class> {
-        Some(self)
+    fn as_class(&self) -> Option<ObjectRef<Class>> {
+        Some(ObjectRef::Ref(self))
     }
-    fn as_class_mut(&mut self) -> Option<&mut Class> {
-        Some(self)
+    fn as_class_mut(&mut self) -> Option<ObjectRefMut<Class>> {
+        Some(ObjectRefMut::Ref(self))
     }
     fn class(&self, _: &Context) -> Ref<Object> {
         self.class.clone()

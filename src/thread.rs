@@ -8,6 +8,7 @@ use smallvec::SmallVec;
 use std::mem;
 use std::sync::Arc;
 
+#[derive(Debug)]
 struct Frame {
     proc: Arc<Proc>,
     register: SmallVec<[Value; 256]>,
@@ -28,6 +29,7 @@ impl Frame {
     }
 }
 
+#[derive(Debug)]
 pub struct Thread {
     context: Arc<Context>,
     frames: Stack<Frame>,
@@ -43,7 +45,7 @@ pub struct Thread {
 #[derive(Debug)]
 pub enum ThreadError {
     StackOverflow,
-    InvalidOperation,
+    InvalidOperation(u8),
     InvalidStatic,
     UnexpectedEnd,
 }
@@ -67,6 +69,10 @@ impl Thread {
         let mut thread = Thread::new_empty(context);
         thread
             .push_frame(proc, Value::Ref(thread.context.root().clone()), 0, None)
+            .unwrap();
+        thread
+            .modules
+            .push(thread.context.object_class().clone())
             .unwrap();
         thread
     }
@@ -182,7 +188,7 @@ impl Thread {
             Op::DEF_SINGLETON_CLASS => self.op_def_singleton_class()?,
             Op::DEF_SINGLETON_METHOD => self.op_def_singleton_method()?,
             Op::PARAM_FALLBACK => self.op_param_fallback()?,
-            _ => return Err(ThreadError::InvalidOperation),
+            code => return Err(ThreadError::InvalidOperation(code)),
         }
 
         Ok(Some(()))
@@ -192,7 +198,8 @@ impl Thread {
     #[inline]
     fn op_load_root(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
-        self.frames.top_mut().unwrap().register[out] = Value::Ref(self.context.root().clone());
+        self.frames.top_mut().unwrap().register[out] =
+            Value::Ref(self.context.object_class().clone());
         Ok(())
     }
     #[inline]
@@ -220,18 +227,33 @@ impl Thread {
     #[inline]
     fn op_load_const(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
+        let parent = self.read_addr()?;
         let name = self.read_symbol()?;
-        match self
-            .modules
-            .top()
-            .unwrap()
-            .get()
-            .as_module()
-            .expect("Item in module stack is not a module")
-            .get_const(name)
-        {
-            Some(value) => self.frames.top_mut().unwrap().register[out] = value,
-            None => self.frames.top_mut().unwrap().register[out] = Value::Nil,
+        let register = &mut self.frames.top_mut().unwrap().register;
+        if parent == SELF {
+            match self
+                .modules
+                .top()
+                .unwrap()
+                .get()
+                .as_module()
+                .expect("Item in module stack is not a module")
+                .get_const(name)
+            {
+                Some(value) => self.frames.top_mut().unwrap().register[out] = value,
+                None => self.frames.top_mut().unwrap().register[out] = Value::Nil,
+            }
+        } else {
+            let value = if let Some(module) = register[parent].as_module() {
+                if let Some(value) = module.get_const(name) {
+                    value
+                } else {
+                    unimplemented!("const doesn’t exist")
+                }
+            } else {
+                unimplemented!("parent is not a module")
+            };
+            register[out] = value;
         }
         Ok(())
     }
@@ -516,7 +538,8 @@ impl Thread {
                 .as_module_mut()
                 .unwrap()
                 .set_const(name, module.clone())
-        } else if let Some(parent) = self.frames.top_mut().unwrap().register[parent].as_module_mut()
+        } else if let Some(mut parent) =
+            self.frames.top_mut().unwrap().register[parent].as_module_mut()
         {
             parent.set_const(name, module.clone())
         } else {
@@ -570,6 +593,7 @@ impl Iterator for Thread {
     }
 }
 
+#[derive(Debug)]
 struct Stack<T> {
     buf: Vec<T>,
     max_len: usize,
@@ -604,6 +628,7 @@ impl<T> Stack<T> {
     }
 }
 
+#[derive(Debug)]
 struct ArgumentBuilder {
     items: SmallVec<[Value; 32]>,
     hash: Vec<(Value, Value)>,

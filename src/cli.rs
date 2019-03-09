@@ -1,6 +1,5 @@
 use sapphire::compiler::compile_ir;
 use sapphire::context::Context;
-use sapphire::proc::Proc;
 use sapphire::symbol::Symbols;
 use sapphire::thread::Thread;
 use std::io::{self, Read, Write};
@@ -40,12 +39,14 @@ fn main() {
                 }
             };
             println!("{}", compiled_ir.fmt_with_symbols(&context.symbols()));
-            let mut thread = Thread::new_root(Arc::clone(&context), Arc::new(compiled_ir.into()));
+            let proc = Arc::new(compiled_ir.into());
+            println!("{:?}", proc);
+            let mut thread = Thread::new_root(Arc::clone(&context), proc);
             loop {
                 match thread.next() {
                     Some(Ok(())) => (),
                     Some(Err(err)) => {
-                        eprintln!("{:?}", err);
+                        eprintln!("{:?} in {:?}", err, thread);
                         break;
                     }
                     None => break,

@@ -1,8 +1,9 @@
 use crate::object::Object;
 use parking_lot::{Mutex, MutexGuard};
+use std::fmt;
 use std::sync::Arc;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Ref<T: ?Sized>(Arc<Mutex<T>>);
 
 impl Ref<Object> {
@@ -26,5 +27,11 @@ impl<T: ?Sized> Ref<T> {
 impl<T: ?Sized> Clone for Ref<T> {
     fn clone(&self) -> Self {
         Ref(Arc::clone(&self.0))
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for Ref<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Ref<{:?}>", &self.0 as *const Arc<_>)
     }
 }

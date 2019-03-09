@@ -5,6 +5,7 @@ use crate::value::Value;
 use fnv::FnvHashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+#[derive(Debug)]
 pub struct Context {
     symbols: RwLock<Symbols>,
     globals: Ref<FnvHashMap<Symbol, Value>>,
