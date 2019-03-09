@@ -1,8 +1,8 @@
 use crate::heap::Ref;
+use crate::numeric::FixnumClass;
 use crate::object::{init_root, Object, RbObject};
 use crate::symbol::{Symbol, Symbols};
 use crate::value::Value;
-use crate::numeric::FixnumClass;
 use fnv::FnvHashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -34,8 +34,8 @@ impl Context {
             symbols: RwLock::new(symbols),
             globals: Ref::new_generic(FnvHashMap::default()),
             root: Ref::new(RbObject::new(object_class.clone())),
-            nil_class: object_class.clone(),    // TODO
-            bool_class: object_class.clone(),   // TODO
+            nil_class: object_class.clone(),  // TODO
+            bool_class: object_class.clone(), // TODO
             fixnum_class,
             float_class: object_class.clone(),  // TODO
             symbol_class: object_class.clone(), // TODO

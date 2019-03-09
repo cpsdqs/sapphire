@@ -1,10 +1,9 @@
 //! Ruby procs.
 
 use crate::context::Context;
-use crate::heap::Ref;
-use crate::object::{Object, ObjectType};
+use crate::object::{Arguments, Object, SendError};
 use crate::symbol::Symbol;
-use crate::thread::Register;
+use crate::thread::{Register, Thread};
 use crate::value::Value;
 use smallvec::SmallVec;
 use std::any::Any;
@@ -70,29 +69,31 @@ impl fmt::Debug for Proc {
 }
 
 impl Object for Arc<Proc> {
-    fn as_any(&self) -> &Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut Any {
-        self
-    }
-    fn object_type(&self) -> ObjectType {
-        ObjectType::Object
-    }
-    fn class(&self, context: &Context) -> Ref<Object> {
-        context.proc_class().clone()
-    }
-    fn get_ivar(&self, _: Symbol) -> Option<Value> {
+    fn get(&self, _: Symbol) -> Option<Value> {
         None
     }
-    fn set_ivar(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
+    fn set(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
         Err(())
+    }
+    fn send(
+        &mut self,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
+    ) -> Result<Value, SendError> {
+        unimplemented!("send")
     }
     fn inspect(&self, context: &Context) -> String {
         format!(
             "<Proc {}>",
             context.symbols().symbol_name(self.name).unwrap()
         )
+    }
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
     }
 }
 

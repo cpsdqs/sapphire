@@ -6,9 +6,9 @@ use crate::symbol::Symbol;
 use crate::value::Value;
 use parking_lot::MutexGuard;
 use smallvec::SmallVec;
-use std::mem;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
+use std::{iter, mem};
 
 #[derive(Debug)]
 struct Frame {
@@ -301,27 +301,15 @@ impl Thread {
         let name = self.read_symbol()?;
         let register = &mut self.frames.top_mut().unwrap().register_mut();
         if parent == SELF {
-            match self
-                .modules
-                .top()
-                .unwrap()
-                .get()
-                .as_module()
-                .expect("Item in module stack is not a module")
-                .get_const(name)
-            {
+            match self.modules.top().unwrap().get().get(name) {
                 Some(value) => register[out] = value,
                 None => register[out] = Value::Nil,
             }
         } else {
-            let value = if let Some(module) = register[parent].as_module() {
-                if let Some(value) = module.get_const(name) {
-                    value
-                } else {
-                    unimplemented!("const doesn’t exist")
-                }
+            let value = if let Some(value) = register[parent].get(name) {
+                value
             } else {
-                unimplemented!("parent is not a module")
+                unimplemented!("const doesn’t exist")
             };
             register[out] = value;
         }
@@ -331,10 +319,14 @@ impl Thread {
     fn op_load_class_var(&mut self) -> Result<(), ThreadError> {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
-        let mut register = self.frames.top_mut().unwrap().register_mut();
-        match register[SELF].class(&self.context).get().get_ivar(name) {
-            Some(value) => register[out] = value,
-            None => register[out] = Value::Nil,
+        let mut self_obj = self.frames.top_mut().unwrap().register_mut()[SELF].clone();
+        let self_class = match self_obj.send(Symbol::CLASS, ().into(), self) {
+            Ok(class) => class,
+            Err(_err) => unimplemented!("exception"),
+        };
+        match self_class.get(name) {
+            Some(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
+            None => self.frames.top_mut().unwrap().register_mut()[out] = Value::Nil,
         }
         Ok(())
     }
@@ -343,7 +335,7 @@ impl Thread {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
         let mut register = self.frames.top_mut().unwrap().register_mut();
-        match register[SELF].get_ivar(name) {
+        match register[SELF].get(name) {
             Some(value) => register[out] = value,
             None => register[out] = Value::Nil,
         }
@@ -452,17 +444,11 @@ impl Thread {
         let args = self.arg_builder.flush(); // TODO: pass args?
         let out = self.read_addr()?;
         let recv = self.read_addr()?;
-        let recv = self.frames.top_mut().unwrap().register_mut()[recv].clone();
+        let mut recv = self.frames.top_mut().unwrap().register_mut()[recv].clone();
         let method = self.read_symbol()?;
-        let resolved = recv
-            .class(&self.context)
-            .get()
-            .as_class_mut()
-            .expect("Receiver class is not a class")
-            .resolve_method(method);
-        match resolved {
-            Some(proc) => self.push_frame(proc, recv, out, Some(args))?,
-            None => unimplemented!("method_missing"),
+        match recv.send(method, args, self) {
+            Ok(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
+            Err(_err) => unimplemented!("exception for {:?}", _err),
         }
         Ok(())
     }
@@ -586,13 +572,7 @@ impl Thread {
         let name = self.read_symbol()?;
         let superclass = self.read_addr()?;
         let superclass = match &self.frames.top_mut().unwrap().register_mut()[superclass] {
-            Value::Ref(r) => {
-                if let Some(_) = r.get().as_class() {
-                    r.clone()
-                } else {
-                    unimplemented!("exception")
-                }
-            }
+            Value::Ref(r) => r.clone(), // TODO: maybe verify that it’s actually a class
             _ => unimplemented!("exception"),
         };
         let proc = match self.read_static()? {
@@ -605,15 +585,9 @@ impl Thread {
                 .top_mut()
                 .unwrap()
                 .get()
-                .as_module_mut()
-                .unwrap()
-                .set_const(name, module.clone())
-        } else if let Some(mut parent) =
-            self.frames.top_mut().unwrap().register_mut()[parent].as_module_mut()
-        {
-            parent.set_const(name, module.clone())
+                .set(name, module.clone())
         } else {
-            unimplemented!("def class in non-const")
+            self.frames.top_mut().unwrap().register_mut()[parent].set(name, module.clone())
         };
         if let Err(()) = res {
             unimplemented!("exception")
@@ -628,16 +602,17 @@ impl Thread {
             Static::Proc(proc) => Arc::clone(proc),
             _ => return Err(ThreadError::InvalidStatic),
         };
-        let res = self
-            .modules
-            .top_mut()
-            .unwrap()
-            .get()
-            .as_module_mut()
-            .unwrap()
-            .def_method(name, proc);
-        if let Err(()) = res {
-            unimplemented!("exception")
+        let top_module = self.modules.top_mut().unwrap().clone();
+        let res = top_module.get().send(
+            Symbol::DEFINE_METHOD,
+            Arguments {
+                args: iter::once(Value::Symbol(name)).collect(),
+                block: Some(Value::Proc(proc)),
+            },
+            self,
+        );
+        if let Err(err) = res {
+            unimplemented!("exception for {:?}", err)
         }
         Ok(())
     }

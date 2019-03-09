@@ -1,6 +1,6 @@
 use crate::context::Context;
-use crate::heap::Ref;
-use crate::object::{Object, ObjectType};
+use crate::object::{Arguments, Object, SendError};
+use crate::thread::Thread;
 use crate::value::Value;
 use std::any::Any;
 use std::collections::HashMap;
@@ -10,23 +10,28 @@ use std::collections::HashMap;
 pub struct Symbol(usize);
 
 impl Object for Symbol {
+    fn get(&self, _: Symbol) -> Option<Value> {
+        None
+    }
+    fn set(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
+        Err(())
+    }
+    fn send(
+        &mut self,
+        _name: Symbol,
+        _args: Arguments,
+        _thread: &mut Thread,
+    ) -> Result<Value, SendError> {
+        unimplemented!("send")
+    }
+    fn inspect(&self, context: &Context) -> String {
+        format!(":{}", context.symbols().symbol_name(*self).unwrap_or("?"))
+    }
     fn as_any(&self) -> &Any {
         self
     }
     fn as_any_mut(&mut self) -> &mut Any {
         self
-    }
-    fn object_type(&self) -> ObjectType {
-        ObjectType::Object
-    }
-    fn class(&self, context: &Context) -> Ref<Object> {
-        context.symbol_class().clone()
-    }
-    fn get_ivar(&self, _: Symbol) -> Option<Value> {
-        None
-    }
-    fn set_ivar(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
-        Err(())
     }
 }
 
@@ -45,11 +50,11 @@ macro_rules! def_common_symbols {
         }
     };
     (__def_consts $c:expr, $name:ident = $str:expr, $($rest:tt)+) => {
-        pub const $name: usize = $c;
+        pub const $name: Symbol = Symbol($c);
         def_common_symbols!(__def_consts $c + 1, $($rest)+);
     };
     (__def_consts $c:expr, $name:ident = $str:expr,) => {
-        pub const $name: usize = $c;
+        pub const $name: Symbol = Symbol($c);
     };
     (__def_table $c:expr, $table:expr, $name:ident = $str:expr, $($rest:tt)+) => {
         $table.insert($str.to_string(), Symbol($c));
@@ -61,6 +66,13 @@ macro_rules! def_common_symbols {
 }
 
 def_common_symbols! {
+    SEND = "send",
+    CLASS = "class",
+    SUPERCLASS = "superclass",
+    NEW = "new",
+    INITIALIZE = "initialize",
+    METHOD = "method",
+    DEFINE_METHOD = "define_method",
     ADD = "+",
     SUB = "-",
     MUL = "*",

@@ -2,150 +2,90 @@ use crate::context::Context;
 use crate::heap::Ref;
 use crate::proc::Proc;
 use crate::symbol::{Symbol, Symbols};
+use crate::thread::Thread;
 use crate::value::Value;
 use fnv::FnvHashMap;
-use parking_lot::MutexGuard;
 use smallvec::SmallVec;
 use std::any::Any;
 use std::mem;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-/// Object types.
-pub enum ObjectType {
-    /// Any sort of object that is not of another type.
-    Object,
-
-    /// A class object. Its class must be the object `Class`.
-    Class,
-
-    /// A module object. Its class must be the object `Module`.
-    Module,
-}
-
-pub enum ObjectRef<'a, T: ?Sized> {
-    Ref(&'a T),
-    Guard(MutexGuard<'a, Object>),
-}
-pub enum ObjectRefMut<'a, T: ?Sized> {
-    Ref(&'a mut T),
-    Guard(MutexGuard<'a, Object>),
-}
-macro_rules! impl_object_ref {
-    ($o:ident, $t:tt, $f:ident) => {
-        impl<'a> Deref for $o<'a, dyn $t> {
-            type Target = dyn $t;
-            fn deref(&self) -> &Self::Target {
-                match self {
-                    $o::Ref(r) => *r,
-                    $o::Guard(r) => unsafe { mem::transmute::<&$t, &$t>(&*r.$f().unwrap()) },
-                }
-            }
-        }
-    };
-    (mut $o:ident, $t:tt, $f:ident) => {
-        impl<'a> DerefMut for $o<'a, dyn $t> {
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                match self {
-                    $o::Ref(r) => *r,
-                    $o::Guard(r) => unsafe {
-                        mem::transmute::<&mut $t, &mut $t>(&mut *r.$f().unwrap())
-                    },
-                }
-            }
-        }
-    };
-}
-impl_object_ref!(ObjectRef, Module, as_module);
-impl_object_ref!(ObjectRef, Class, as_class);
-impl_object_ref!(ObjectRefMut, Module, as_module);
-impl_object_ref!(ObjectRefMut, Class, as_class);
-impl_object_ref!(mut ObjectRefMut, Module, as_module_mut);
-impl_object_ref!(mut ObjectRefMut, Class, as_class_mut);
-
-/// An object.
 pub trait Object: Send {
-    /// Helper method for downcasting.
+    fn get(&self, name: Symbol) -> Option<Value>;
+    fn set(&mut self, name: Symbol, value: Value) -> Result<(), ()>;
+    fn send(
+        &mut self,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
+    ) -> Result<Value, SendError>;
+    fn inspect(&self, context: &Context) -> String;
+
     fn as_any(&self) -> &Any;
-
-    /// Helper method for downcasting.
     fn as_any_mut(&mut self) -> &mut Any;
-
-    fn as_module(&self) -> Option<ObjectRef<Module>> {
-        None
-    }
-    fn as_module_mut(&mut self) -> Option<ObjectRefMut<Module>> {
-        None
-    }
-    fn as_class(&self) -> Option<ObjectRef<Class>> {
-        None
-    }
-    fn as_class_mut(&mut self) -> Option<ObjectRefMut<Class>> {
-        None
-    }
-
-    /// Returns the object type.
-    fn object_type(&self) -> ObjectType;
-
-    /// Returns the object’s class.
-    fn class(&self, context: &Context) -> Ref<Object>;
-
-    /// Returns an instance variable.
-    fn get_ivar(&self, name: Symbol) -> Option<Value>;
-
-    /// Sets an instance variable.
-    fn set_ivar(&mut self, name: Symbol, value: Value) -> Result<(), ()>;
-
-    fn inspect(&self, _context: &Context) -> String {
-        format!("<?:{:?}>", self as *const _)
-    }
-}
-
-/// A module object.
-pub trait Module: Object {
-    /// Returns a constant.
-    fn get_const(&self, name: Symbol) -> Option<Value> {
-        self.get_ivar(name)
-    }
-
-    /// Attempts to set a constant.
-    fn set_const(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
-        self.set_ivar(name, value)
-    }
-
-    /// Defines a method on this module.
-    fn def_method(&mut self, name: Symbol, body: Arc<Proc>) -> Result<(), ()>;
-
-    /// Resolves a method.
-    fn resolve_method(&mut self, name: Symbol) -> Option<Arc<Proc>>;
-
-    /// Includes a module.
-    fn include_module(&mut self, module: Ref<Object>) -> Result<(), ()>;
-}
-
-/// A class object.
-pub trait Class: Module {
-    fn superclass(&self, context: &Context) -> Ref<Object>;
 }
 
 impl Object {
-    /// Attempts to downcast the [Object] into the type T.
-    pub fn downcast_ref<T: Any + Send>(this: &Object) -> Option<&T> {
-        this.as_any().downcast_ref::<T>()
+    pub fn downcast_ref<T: 'static + Object>(this: &dyn Object) -> Option<&T> {
+        this.as_any().downcast_ref()
     }
-
-    /// Attempts to downcast the [Object] into a mutable reference to the type T.
-    pub fn downcast_mut<T: Any + Send>(this: &mut Object) -> Option<&mut T> {
-        this.as_any_mut().downcast_mut::<T>()
+    pub fn downcast_mut<T: 'static + Object>(this: &mut dyn Object) -> Option<&mut T> {
+        this.as_any_mut().downcast_mut()
     }
 }
 
-/// Method call arguments.
+/// Method send errors.
 #[derive(Debug)]
+pub enum SendError {
+    MethodMissing,
+    Exception(Value),
+}
+
+/// Method call arguments.
+#[derive(Debug, Default)]
 pub struct Arguments {
     pub args: SmallVec<[Value; 32]>,
     pub block: Option<Value>,
 }
+
+impl From<()> for Arguments {
+    fn from(this: ()) -> Arguments {
+        Arguments::default()
+    }
+}
+impl From<Symbol> for Arguments {
+    fn from(this: Symbol) -> Arguments {
+        let mut args = SmallVec::new();
+        args.push(Value::Symbol(this));
+        Arguments { args, block: None }
+    }
+}
+macro_rules! impl_from_values {
+    ($($i:tt: $v:ty),+$(,)*) => {
+        impl From<($($v,)+)> for Arguments {
+            fn from(this: ($($v,)+)) -> Arguments {
+                let mut args = SmallVec::new();
+                $(args.push(this.$i);)+
+                Arguments { args, block: None }
+            }
+        }
+    }
+}
+impl_from_values!(0: Value);
+impl_from_values!(0: Value, 1: Value);
+impl_from_values!(0: Value, 1: Value, 2: Value);
+impl_from_values!(0: Value, 1: Value, 2: Value, 3: Value);
+impl_from_values!(0: Value, 1: Value, 2: Value, 3: Value, 4: Value);
+impl_from_values!(0: Value, 1: Value, 2: Value, 3: Value, 4: Value, 5: Value);
+impl_from_values!(
+    0: Value,
+    1: Value,
+    2: Value,
+    3: Value,
+    4: Value,
+    5: Value,
+    6: Value
+);
 
 /// A Ruby-defined class.
 pub struct RbClass {
@@ -170,58 +110,8 @@ impl RbClass {
             superclass,
         }
     }
-}
 
-impl Object for RbClass {
-    fn as_any(&self) -> &Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut Any {
-        self
-    }
-    fn object_type(&self) -> ObjectType {
-        ObjectType::Class
-    }
-    fn as_module(&self) -> Option<ObjectRef<Module>> {
-        Some(ObjectRef::Ref(self))
-    }
-    fn as_module_mut(&mut self) -> Option<ObjectRefMut<Module>> {
-        Some(ObjectRefMut::Ref(self))
-    }
-    fn as_class(&self) -> Option<ObjectRef<Class>> {
-        Some(ObjectRef::Ref(self))
-    }
-    fn as_class_mut(&mut self) -> Option<ObjectRefMut<Class>> {
-        Some(ObjectRefMut::Ref(self))
-    }
-    fn class(&self, _: &Context) -> Ref<Object> {
-        self.class.clone()
-    }
-    fn get_ivar(&self, name: Symbol) -> Option<Value> {
-        self.class_vars.get(&name).map(|value| value.clone())
-    }
-    fn set_ivar(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
-        self.class_vars.insert(name, value);
-        Ok(())
-    }
-    fn inspect(&self, context: &Context) -> String {
-        format!("<Class:{}>", context.symbols().symbol_name(self.name).unwrap_or("?"))
-    }
-}
-
-impl Module for RbClass {
-    fn get_const(&self, name: Symbol) -> Option<Value> {
-        self.class_vars.get(&name).map(|value| value.clone())
-    }
-    fn set_const(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
-        self.class_vars.insert(name, value);
-        Ok(())
-    }
-    fn def_method(&mut self, name: Symbol, body: Arc<Proc>) -> Result<(), ()> {
-        self.methods.insert(name, body);
-        Ok(())
-    }
-    fn resolve_method(&mut self, name: Symbol) -> Option<Arc<Proc>> {
+    pub fn method(&mut self, name: Symbol) -> Option<Arc<Proc>> {
         if let Some(proc) = self.method_cache.get(&name) {
             return Some(Arc::clone(proc));
         }
@@ -236,15 +126,46 @@ impl Module for RbClass {
         }
         out
     }
-    fn include_module(&mut self, module: Ref<Object>) -> Result<(), ()> {
-        self.modules.push(module);
-        Ok(())
-    }
 }
 
-impl Class for RbClass {
-    fn superclass(&self, _: &Context) -> Ref<Object> {
-        self.superclass.clone()
+impl Object for RbClass {
+    fn get(&self, name: Symbol) -> Option<Value> {
+        self.class_vars.get(&name).map(|value| value.clone())
+    }
+    fn set(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
+        self.class_vars.insert(name, value);
+        Ok(())
+    }
+    fn send(&mut self, name: Symbol, args: Arguments, _: &mut Thread) -> Result<Value, SendError> {
+        match name {
+            // TODO: proper argument validation
+            Symbol::METHOD => match args.args.get(0) {
+                Some(Value::Symbol(name)) => {
+                    Ok(self.method(*name).map(Value::Proc).unwrap_or(Value::Nil))
+                }
+                _ => unimplemented!("raise ArgumentError"),
+            },
+            Symbol::DEFINE_METHOD => match (args.args.get(0), args.block) {
+                (Some(Value::Symbol(name)), Some(Value::Proc(ref proc))) => {
+                    self.methods.insert(*name, proc.clone());
+                    Ok(Value::Nil)
+                }
+                _ => unimplemented!("raise ArgumentError"),
+            },
+            _ => Err(SendError::MethodMissing),
+        }
+    }
+    fn inspect(&self, context: &Context) -> String {
+        format!(
+            "<Class:{}>",
+            context.symbols().symbol_name(self.name).unwrap_or("?")
+        )
+    }
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
     }
 }
 
@@ -264,24 +185,30 @@ impl RbObject {
 }
 
 impl Object for RbObject {
+    fn get(&self, name: Symbol) -> Option<Value> {
+        self.ivars.get(&name).map(|value| value.clone())
+    }
+    fn set(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
+        self.ivars.insert(name, value);
+        Ok(())
+    }
+    fn send(
+        &mut self,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
+    ) -> Result<Value, SendError> {
+        unimplemented!("send")
+    }
+    fn inspect(&self, context: &Context) -> String {
+        let class = self.class.get().inspect(context);
+        format!("<{}:{:?}>", class, self as *const Self)
+    }
     fn as_any(&self) -> &Any {
         self
     }
     fn as_any_mut(&mut self) -> &mut Any {
         self
-    }
-    fn object_type(&self) -> ObjectType {
-        ObjectType::Object
-    }
-    fn class(&self, _: &Context) -> Ref<Object> {
-        self.class.clone()
-    }
-    fn get_ivar(&self, name: Symbol) -> Option<Value> {
-        self.ivars.get(&name).map(|value| value.clone())
-    }
-    fn set_ivar(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
-        self.ivars.insert(name, value);
-        Ok(())
     }
 }
 
