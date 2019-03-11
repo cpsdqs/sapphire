@@ -73,6 +73,7 @@ def_common_symbols! {
     INITIALIZE = "initialize",
     METHOD = "method",
     DEFINE_METHOD = "define_method",
+    METHOD_MISSING = "method_missing",
     ADD = "+",
     SUB = "-",
     MUL = "*",

@@ -51,3 +51,60 @@ impl Object for FixnumClass {
         self
     }
 }
+
+impl Object for i64 {
+    fn get(&self, _: Symbol) -> Option<Value> {
+        None
+    }
+    fn set(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
+        Err(())
+    }
+    fn send(
+        &mut self,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
+    ) -> Result<Value, SendError> {
+        match name {
+            Symbol::CLASS => Ok(Value::Ref(thread.context().fixnum_class().clone())),
+            Symbol::ADD | Symbol::SUB | Symbol::MUL | Symbol::DIV | Symbol::REM => {
+                // TODO: proper argument validation
+                match args.args.get(0) {
+                    // TODO: use checked operations
+                    Some(Value::Fixnum(rhs)) => match name {
+                        Symbol::ADD => Ok(Value::Fixnum(*self + rhs)),
+                        Symbol::SUB => Ok(Value::Fixnum(*self - rhs)),
+                        Symbol::MUL => Ok(Value::Fixnum(*self * rhs)),
+                        Symbol::DIV => Ok(Value::Fixnum(*self / rhs)),
+                        Symbol::REM => Ok(Value::Fixnum(*self % rhs)),
+                        _ => unreachable!(),
+                    },
+                    Some(Value::Float(rhs)) => match name {
+                        Symbol::ADD => Ok(Value::Float(*self as f64 + rhs)),
+                        Symbol::SUB => Ok(Value::Float(*self as f64 - rhs)),
+                        Symbol::MUL => Ok(Value::Float(*self as f64 * rhs)),
+                        Symbol::DIV => Ok(Value::Float(*self as f64 / rhs)),
+                        Symbol::REM => Ok(Value::Float(*self as f64 % rhs)),
+                        _ => unreachable!(),
+                    },
+                    _ => unimplemented!("argument error"),
+                }
+            }
+            Symbol::EQ => match args.args.get(0) {
+                Some(Value::Fixnum(rhs)) => Ok(Value::Bool(self == rhs)),
+                Some(_) => Ok(Value::Bool(false)),
+                _ => unimplemented!("argument error"),
+            },
+            _ => unimplemented!("use normal send"),
+        }
+    }
+    fn inspect(&self, _: &Context) -> String {
+        format!("{:?}", self)
+    }
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
+    }
+}

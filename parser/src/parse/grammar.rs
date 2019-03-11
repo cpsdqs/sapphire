@@ -785,7 +785,7 @@ sapphire_parser_gen::parser! {
         i: variable ws token!(OAssign) wss e: expression => {
             Expression::AssignVar(i, Box::new(e))
         },
-        not!(keyword; err: Expression)
+        not!(alt!(keyword, operator_method_name, err: Expression); err: Expression)
             i: method_name
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {

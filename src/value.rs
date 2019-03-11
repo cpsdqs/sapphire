@@ -119,9 +119,6 @@ impl_object_for_primitive!((), nil_class, fn inspect(&self, _: &Context) -> Stri
 impl_object_for_primitive!(bool, bool_class, fn inspect(&self, _: &Context) -> String {
     format!("{:?}", self)
 });
-impl_object_for_primitive!(i64, fixnum_class, fn inspect(&self, _: &Context) -> String {
-    format!("{:?}", self)
-});
 impl_object_for_primitive!(f64, float_class, fn inspect(&self, _: &Context) -> String {
     format!("{:?}", self)
 });

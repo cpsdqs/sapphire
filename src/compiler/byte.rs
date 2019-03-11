@@ -269,6 +269,7 @@ impl IRProc {
                     code.push(Chunk::Byte(Op::RESCUE_BIND));
                     addr_var!(var);
                 }
+                IROp::ContinueRescue => code.push(Chunk::Byte(Op::CONTINUE_RESCUE)),
                 IROp::EndRescue => {
                     code.push(Chunk::Byte(Op::END_RESCUE));
                 }

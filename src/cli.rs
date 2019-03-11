@@ -1,7 +1,8 @@
 use sapphire::compiler::compile_ir;
 use sapphire::context::Context;
+use sapphire::object::Object;
 use sapphire::symbol::Symbols;
-use sapphire::thread::Thread;
+use sapphire::thread::{Thread, ThreadResult};
 use std::io::{self, Read, Write};
 use std::process::exit;
 use std::sync::Arc;
@@ -24,7 +25,7 @@ fn main() {
     } else {
         let context = Arc::new(Context::new());
         loop {
-            print!("sapphire (IR)> ");
+            print!("\x1b[38;5;248msapphire (IR,byte,exec)> \x1b[m");
             io::stdout().flush().unwrap();
 
             let mut input = String::new();
@@ -44,12 +45,15 @@ fn main() {
             let mut thread = Thread::new_root(Arc::clone(&context), proc);
             loop {
                 match thread.next() {
-                    Some(Ok(())) => (),
-                    Some(Err(err)) => {
+                    ThreadResult::NotReady => (),
+                    ThreadResult::Ready(value) => {
+                        println!("-> \x1b[32m{}\x1b[m", value.inspect(&context));
+                        break;
+                    }
+                    ThreadResult::Err(err) => {
                         eprintln!("{:?} in {:?}", err, thread);
                         break;
                     }
-                    None => break,
                 }
             }
         }

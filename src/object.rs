@@ -198,7 +198,23 @@ impl Object for RbObject {
         args: Arguments,
         thread: &mut Thread,
     ) -> Result<Value, SendError> {
-        unimplemented!("send")
+        let res = self.class.get().send(Symbol::METHOD, name.into(), thread);
+        match res {
+            Ok(Value::Proc(_method)) => {
+                eprintln!("TODO: call method on thread somehow");
+                Ok(Value::Nil)
+            }
+            Ok(Value::Nil) => {
+                if name != Symbol::METHOD_MISSING {
+                    let mut args = args;
+                    args.args.insert(0, Value::Symbol(name));
+                    self.send(Symbol::METHOD_MISSING, args, thread)
+                } else {
+                    unimplemented!("method_missing is missing")
+                }
+            }
+            res => unimplemented!("handle unexpected class.method response: {:?}", res),
+        }
     }
     fn inspect(&self, context: &Context) -> String {
         let class = self.class.get().inspect(context);

@@ -315,6 +315,8 @@ pub enum IROp {
     RescueMatch(Var, Label),
     /// Binds the exception to a variable.
     RescueBind(Var),
+    /// Continues unwinding the stack.
+    ContinueRescue,
     /// End of a rescuable section.
     EndRescue,
     /// `defined?` for a constant variable.
@@ -393,7 +395,9 @@ impl IROp {
                 cb(var, false);
                 cb(var2, false);
             }
-            Label(_) | Jump(_) | BeginRescue(_) | EndRescue | DefMethod(_, _) => (),
+            Label(_) | Jump(_) | BeginRescue(_) | ContinueRescue | EndRescue | DefMethod(_, _) => {
+                ()
+            }
             DefClass(var, _, var2, _) => {
                 cb(var, false);
                 if let Some(var) = var2 {
@@ -444,6 +448,7 @@ impl IROp {
             | AssignParent(_, _, _)
             | BeginRescue(_)
             | RescueMatch(_, _)
+            | ContinueRescue
             | EndRescue
             | DefModule(_, _, _)
             | DefClass(_, _, _, _)
@@ -499,7 +504,8 @@ impl IROp {
             IROp::BeginRescue(label) => format!("begin rescue (rescue -> {})", label),
             IROp::RescueMatch(class, label) => format!("rescue instanceof {} -> {}", class, label),
             IROp::RescueBind(var) => format!("rescue => {};", var),
-            IROp::EndRescue => format!("end rescue"),
+            IROp::ContinueRescue => format!("continue rescue;"),
+            IROp::EndRescue => format!("end rescue;"),
             IROp::DefinedConst(var, name) => format!("{} = defined? {};", var, sym!(name)),
             IROp::DefinedGlobal(var, name) => format!("{} = defined? ${};", var, sym!(name)),
             IROp::DefinedClassVar(var, name) => format!("{} = defined? @@{};", var, sym!(name)),
@@ -1961,6 +1967,7 @@ impl IRProc {
             items.push(IROp::Jump(ensure_label));
             items.push(IROp::Label(end_label));
         }
+        items.push(IROp::ContinueRescue);
         items.push(IROp::Label(else_label));
         if let Some(else_) = &body.else_ {
             Self::expand_statements(&else_, out, scope, items)?;
