@@ -195,6 +195,13 @@ impl IRProc {
                     addr_var!(recv);
                     addr_static!(Static::Sym(name));
                 }
+                IROp::CallOne(var, recv, name, arg) => {
+                    code.push(Chunk::Byte(Op::CALL_ONE));
+                    addr_var!(var);
+                    addr_var!(recv);
+                    addr_static!(Static::Sym(name));
+                    addr_var!(arg);
+                }
                 IROp::Super(var) => {
                     code.push(Chunk::Byte(Op::SUPER));
                     addr_var!(var);
@@ -405,9 +412,15 @@ impl IRProc {
                 .unwrap_or(VOID) as u16,
         };
 
+        let block_idx = self.block_var.map_or(None, |var| match var {
+            Var::Local(i) => registers.get(&i).map(|i| *i),
+            _ => None
+        });
+
         Proc {
             name: self.name,
             registers: register_count,
+            block_idx,
             statics,
             mode,
             code,

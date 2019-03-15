@@ -22,6 +22,9 @@ pub struct Proc {
     pub name: Symbol,
     /// Number of registers.
     pub registers: usize,
+    /// Register index at which the block parameter is stored.
+    /// If None, the parent value should be used.
+    pub block_idx: Option<usize>,
     /// Static values.
     pub statics: Vec<Static>,
     /// Addressing mode.
@@ -39,6 +42,7 @@ impl Proc {
         Proc {
             name: self.name,
             registers: self.registers,
+            block_idx: self.block_idx,
             statics: self.statics.clone(),
             mode: self.mode,
             code: self.code.clone(),
@@ -61,6 +65,7 @@ impl fmt::Debug for Proc {
         f.debug_struct("Proc")
             .field("name", &self.name)
             .field("registers", &self.registers)
+            .field("block_idx", &self.block_idx)
             .field("statics", &self.statics)
             .field("mode", &self.mode)
             .field("code", &code)
@@ -169,6 +174,7 @@ def_op! {
     ARG_BLOCK = 0x14,
     READ_ARGS = 0x15,
     CALL = 0x10,
+    CALL_ONE = 0x17,
     SUPER = 0x11,
     NOT = 0x16,
     JUMP = 0x20,

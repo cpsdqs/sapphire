@@ -285,6 +285,8 @@ pub enum IROp {
     ArgBlock(Var),
     /// Calls a method and loads the result into a local variable.
     Call(Var, Var, Symbol),
+    /// Calls a method with one argument and loads the result into a local variable.
+    CallOne(Var, Var, Symbol, Var),
     /// Calls super and loads the result into a local variable.
     Super(Var),
     /// Performs the not operation on the second argument and loads it into the first argument.
@@ -406,6 +408,11 @@ impl IROp {
                     cb(var, false);
                 };
             }
+            CallOne(out, inp, _, arg) => {
+                cb(inp, false);
+                cb(arg, false);
+                cb(out, true);
+            }
         }
     }
 
@@ -438,6 +445,7 @@ impl IROp {
             | ArgAssoc(_, _)
             | ArgBlock(_)
             | Call(_, _, _)
+            | CallOne(_, _, _, _)
             | Super(_)
             | Label(_)
             | Jump(_)
@@ -490,6 +498,7 @@ impl IROp {
             IROp::ArgAssoc(key, val) => format!("push_arg {} => {};", key, val),
             IROp::ArgBlock(var) => format!("push_arg &{};", var),
             IROp::Call(out, recv, name) => format!("{} = {}.{}();", out, recv, sym!(name)),
+            IROp::CallOne(out, recv, name, arg) => format!("{} = {}.{}({});", out, recv, sym!(name), arg),
             IROp::Super(out) => format!("{} = super();", out),
             IROp::Not(out, var) => format!("{} = not {};", out, var),
             IROp::Label(label) => format!("{}", label),
@@ -559,6 +568,8 @@ pub struct IRProc {
     pub(super) name: Symbol,
     /// Mapping of register variables to local variable names.
     pub(super) variables: FnvHashMap<Var, Symbol>,
+    /// Block parameter variable.
+    pub(super) block_var: Option<Var>,
     /// List of captured variables.
     pub(super) captured_vars: FnvHashSet<Var>,
     /// If true, this proc may be captured in a block.
@@ -648,6 +659,7 @@ impl IRProc {
 
         let mut proc = IRProc {
             name,
+            block_var: scope.block_var,
             variables,
             captured_vars,
             may_be_captured,
@@ -705,6 +717,7 @@ impl IRProc {
 
         let mut proc = IRProc {
             name,
+            block_var: scope.block_var,
             variables,
             captured_vars,
             may_be_captured,
@@ -1205,6 +1218,7 @@ impl IRProc {
                 let proc = IRProc {
                     name,
                     variables,
+                    block_var: None,
                     captured_vars,
                     may_be_captured,
                     is_block: true,
@@ -1307,7 +1321,6 @@ impl IRProc {
                 } else {
                     let lhs = Self::expand_expr(lhs, scope, items)?;
                     let rhs = Self::expand_expr(rhs, scope, items)?;
-                    items.push(IROp::Arg(rhs));
 
                     let op = match op {
                         Neq => "!=",
@@ -1336,7 +1349,7 @@ impl IRProc {
                         KeywordAnd | KeywordOr => unreachable!(),
                     };
 
-                    items.push(IROp::Call(out, lhs, scope.symbol(op)));
+                    items.push(IROp::CallOne(out, lhs, scope.symbol(op), rhs));
                     Ok(out)
                 }
             }
@@ -1539,6 +1552,7 @@ impl IRProc {
                         may_be_captured: false,
                         is_block: true,
                         variables: FnvHashMap::default(),
+                        block_var: None,
                         params: IRParams {
                             positional: Vec::new(),
                             keyword: Vec::new(),
@@ -1557,9 +1571,20 @@ impl IRProc {
             }
             Expression::Begin(body) => Self::expand_body_statement(body, scope, items),
             Expression::Call { member, name, args } => {
+                let single_arg = if args.items.len() == 1 && args.hash.is_empty() && args.block.is_none() {
+                    match &args.items[0] {
+                        Argument::Expr(expr) => {
+                            let expr = Self::expand_expr(expr, scope, items)?;
+                            Some(expr)
+                        }
+                        _ => None
+                    }
+                } else {
+                    None
+                };
+
                 if let Some(member) = member {
-                    let out = Self::expand_expr(member, scope, items)?;
-                    Self::expand_args(args, scope, items)?;
+                    let recv = Self::expand_expr(member, scope, items)?;
                     let name = match name {
                         Ident::Local(s) | Ident::MethodOnly(s) | Ident::AssignmentMethod(s) => {
                             scope.symbol(s)
@@ -1569,42 +1594,52 @@ impl IRProc {
                             return Err(IRError::InvalidMethodName(name.clone()));
                         }
                     };
-                    if out.is_special() {
-                        let recv = out;
-                        let out = scope.next_var();
-                        items.push(IROp::Call(out, recv, name));
-                        Ok(out)
-                    } else {
-                        items.push(IROp::Call(out, out, name));
-                        Ok(out)
-                    }
-                } else {
-                    Self::expand_args(args, scope, items)?;
                     let out = scope.next_var();
-                    match name {
+                    if let Some(arg) = single_arg {
+                        items.push(IROp::CallOne(out, recv, name, arg));
+                    } else {
+                        Self::expand_args(args, scope, items)?;
+                        items.push(IROp::Call(out, recv, name));
+                    }
+                    Ok(out)
+                } else {
+                    let out = scope.next_var();
+                    let (pre, recv, method) = match name {
                         Ident::Local(s) | Ident::MethodOnly(s) | Ident::AssignmentMethod(s) => {
-                            items.push(IROp::Call(out, Var::SelfRef, scope.symbol(s)));
+                            (None, Var::SelfRef, scope.symbol(s))
                         }
                         Ident::Keyword(s) => {
-                            items.push(IROp::Call(out, Var::SelfRef, scope.symbol(s)));
+                            (None, Var::SelfRef, scope.symbol(s))
                         }
                         Ident::Global(name) => {
-                            items.push(IROp::LoadGlobal(out, scope.symbol(name)));
-                            items.push(IROp::Call(out, out, scope.symbol("call")));
+                            let pre = IROp::LoadGlobal(out, scope.symbol(name));
+                            (Some(pre), out, scope.symbol("call"))
                         }
                         Ident::Const(name) => {
-                            items.push(IROp::LoadConst(out, Var::SelfRef, scope.symbol(name)));
-                            items.push(IROp::Call(out, out, scope.symbol("call")));
+                            let pre = IROp::LoadConst(out, Var::SelfRef, scope.symbol(name));
+                            (Some(pre), out, scope.symbol("call"))
                         }
                         Ident::Class(name) => {
-                            items.push(IROp::LoadClassVar(out, scope.symbol(name)));
-                            items.push(IROp::Call(out, out, scope.symbol("call")));
+                            let pre = IROp::LoadClassVar(out, scope.symbol(name));
+                            (Some(pre), out, scope.symbol("call"))
                         }
                         Ident::Instance(name) => {
-                            items.push(IROp::LoadIVar(out, scope.symbol(name)));
-                            items.push(IROp::Call(out, out, scope.symbol("call")));
+                            let pre = IROp::LoadIVar(out, scope.symbol(name));
+                            (Some(pre), out, scope.symbol("call"))
                         }
                     };
+                    if let Some(arg) = single_arg {
+                        if let Some(pre) = pre {
+                            items.push(pre);
+                        }
+                        items.push(IROp::CallOne(out, recv, method, arg));
+                    } else {
+                        Self::expand_args(args, scope, items)?;
+                        if let Some(pre) = pre {
+                            items.push(pre);
+                        }
+                        items.push(IROp::Call(out, recv, method));
+                    }
                     Ok(out)
                 }
             }

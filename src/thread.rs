@@ -11,18 +11,24 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 use std::{iter, mem};
 
+/// A stack frame.
 #[derive(Debug)]
 struct Frame {
     proc: Arc<Proc>,
     register: Register,
 }
 
-type RegisterInner = SmallVec<[Value; 256]>;
+type RegisterInner = SmallVec<[Value; 16]>;
+
+/// Types of registers: local or detached.
+/// Registers are detached if the local variable scope is captured in a block.
 #[derive(Debug, Clone)]
 pub(crate) enum Register {
     Local(RegisterInner),
     Detached(Ref<RegisterInner>),
 }
+
+/// Register reference.
 enum RegisterMut<'a> {
     Local(&'a mut RegisterInner),
     Detached(MutexGuard<'a, RegisterInner>),
@@ -273,6 +279,7 @@ impl Thread {
             Op::ARG_ASSOC => self.op_arg_assoc(),
             Op::ARG_BLOCK => self.op_arg_block(),
             Op::CALL => self.op_call(),
+            Op::CALL_ONE => self.op_call_one(),
             Op::SUPER => self.op_super(),
             Op::NOT => self.op_not(),
             Op::JUMP => self.op_jump(),
@@ -494,6 +501,22 @@ impl Thread {
         self.out_var = Some(out);
         let (mut arg_iter, block) = args.as_args();
         match recv.send(method, Arguments::new(&mut arg_iter, block), self) {
+            Ok(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
+            Err(_err) => unimplemented!("exception for {:?}", _err),
+        }
+        Ok(None)
+    }
+    #[inline]
+    fn op_call_one(&mut self) -> OpResult {
+        let out = self.read_addr()?;
+        let recv = self.read_addr()?;
+        let method = self.read_symbol()?;
+        let arg = self.read_addr()?;
+        let (mut recv, mut arg_iter) = {
+            let register = self.frames.top_mut().unwrap().register_mut();
+            (register[recv].clone(), iter::once(register[arg].clone()))
+        };
+        match recv.send(method, Arguments::new(&mut arg_iter, None), self) {
             Ok(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
             Err(_err) => unimplemented!("exception for {:?}", _err),
         }
@@ -722,6 +745,8 @@ impl<T> Stack<T> {
         self.buf.last_mut()
     }
 }
+
+// TODO: ring buffer for arguments or something
 
 #[derive(Debug)]
 struct ArgumentBuilder {
