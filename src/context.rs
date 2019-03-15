@@ -33,7 +33,7 @@ impl Context {
         Context {
             symbols: RwLock::new(symbols),
             globals: Ref::new_generic(FnvHashMap::default()),
-            root: Ref::new(RbObject::new(object_class.clone())),
+            root: RbObject::new(object_class.clone()),
             nil_class: object_class.clone(),  // TODO
             bool_class: object_class.clone(), // TODO
             fixnum_class,

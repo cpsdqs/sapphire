@@ -99,7 +99,7 @@ macro_rules! impl_object_for_primitive {
             fn as_any_mut(&mut self) -> &mut Any {
                 self
             }
-            fn send(&mut self, name: Symbol, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+            fn send(&mut self, _: Symbol, _: Arguments, _: &mut Thread) -> Result<Value, SendError> {
                 unimplemented!("send")
             }
             fn get(&self, _: Symbol) -> Option<Value> {
@@ -117,8 +117,5 @@ impl_object_for_primitive!((), nil_class, fn inspect(&self, _: &Context) -> Stri
     String::from("nil")
 });
 impl_object_for_primitive!(bool, bool_class, fn inspect(&self, _: &Context) -> String {
-    format!("{:?}", self)
-});
-impl_object_for_primitive!(f64, float_class, fn inspect(&self, _: &Context) -> String {
     format!("{:?}", self)
 });

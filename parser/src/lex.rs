@@ -597,8 +597,13 @@ named!(float_literal<&str, UnsignedNumeric>, alt_complete!(
     | do_parse!(contents: float_without_exp >> (UnsignedNumeric::Float(contents.0, contents.1)))
 ));
 named!(float_without_exp<&str, (&str, &str)>, do_parse!(
-    peek!(one_of!("123456789")) >>
-    int_part: take_while1!(|c: char| c == '_' || c.is_digit(10)) >>
+    int_part: alt_complete!(
+        do_parse!(
+            peek!(one_of!("123456789")) >>
+            int_part: take_while1!(|c: char| c == '_' || c.is_digit(10)) >>
+            (int_part)
+        ) | do_parse!(int_part: tag!("0") >> (int_part))
+    ) >>
     char!('.') >>
     decimal_part: take_while1!(|c: char| c == '_' || c.is_digit(10)) >>
     ((int_part, decimal_part))

@@ -1,10 +1,13 @@
 use crate::object::Object;
 use parking_lot::{Mutex, MutexGuard};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Weak as WeakArc};
 
 #[derive(Default)]
 pub struct Ref<T: ?Sized>(Arc<Mutex<T>>);
+
+#[derive(Default)]
+pub struct Weak<T: ?Sized>(WeakArc<Mutex<T>>);
 
 impl Ref<Object> {
     pub fn new<T: Object + 'static>(this: T) -> Ref<Object> {
@@ -21,6 +24,16 @@ impl<T> Ref<T> {
 impl<T: ?Sized> Ref<T> {
     pub fn get(&self) -> MutexGuard<T> {
         self.0.lock()
+    }
+
+    pub fn downgrade(&self) -> Weak<T> {
+        Weak(Arc::downgrade(&self.0))
+    }
+}
+
+impl<T: ?Sized> Weak<T> {
+    pub fn upgrade(&self) -> Option<Ref<T>> {
+        self.0.upgrade().map(Ref)
     }
 }
 

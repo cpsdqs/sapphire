@@ -1,5 +1,7 @@
 //! Intermediate representation.
 
+// TODO: create control flow graph
+
 use crate::symbol::{Symbol, Symbols};
 use fnv::{FnvHashMap, FnvHashSet};
 use sapphire_parser::ast::*;
@@ -1270,6 +1272,7 @@ impl IRProc {
             }
             Expression::BinOp(lhs, op, rhs) => {
                 use sapphire_parser::ast::BinaryOp::*;
+                let out = scope.next_var();
 
                 if let KeywordAnd = op {
                     // short-circuited && implemented as follows:
@@ -1278,13 +1281,14 @@ impl IRProc {
                     // rhs = RHS
                     // result = rhs
                     // end:
-                    let result = Self::expand_expr(lhs, scope, items)?;
+                    let lhs = Self::expand_expr(lhs, scope, items)?;
                     let end_label = scope.next_label();
-                    items.push(IROp::JumpIfNot(result, end_label));
+                    items.push(IROp::Assign(out, lhs));
+                    items.push(IROp::JumpIfNot(out, end_label));
                     let rhs = Self::expand_expr(rhs, scope, items)?;
-                    items.push(IROp::Assign(result, rhs));
+                    items.push(IROp::Assign(out, rhs));
                     items.push(IROp::Label(end_label));
-                    Ok(result)
+                    Ok(out)
                 } else if let KeywordOr = op {
                     // short-circuited || implemented as follows:
                     // result = LHS
@@ -1292,13 +1296,14 @@ impl IRProc {
                     // rhs = RHS
                     // result = rhs
                     // end:
-                    let result = Self::expand_expr(lhs, scope, items)?;
+                    let lhs = Self::expand_expr(lhs, scope, items)?;
                     let end_label = scope.next_label();
-                    items.push(IROp::JumpIf(result, end_label));
+                    items.push(IROp::Assign(out, lhs));
+                    items.push(IROp::JumpIf(out, end_label));
                     let rhs = Self::expand_expr(rhs, scope, items)?;
-                    items.push(IROp::Assign(result, rhs));
+                    items.push(IROp::Assign(out, rhs));
                     items.push(IROp::Label(end_label));
-                    Ok(result)
+                    Ok(out)
                 } else {
                     let lhs = Self::expand_expr(lhs, scope, items)?;
                     let rhs = Self::expand_expr(rhs, scope, items)?;
@@ -1331,8 +1336,8 @@ impl IRProc {
                         KeywordAnd | KeywordOr => unreachable!(),
                     };
 
-                    items.push(IROp::Call(lhs, lhs, scope.symbol(op)));
-                    Ok(lhs)
+                    items.push(IROp::Call(out, lhs, scope.symbol(op)));
+                    Ok(out)
                 }
             }
             Expression::If {

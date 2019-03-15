@@ -1,14 +1,14 @@
 use crate::context::Context;
-use crate::heap::Ref;
+use crate::heap::{Ref, Weak};
 use crate::proc::Proc;
 use crate::symbol::{Symbol, Symbols};
-use crate::thread::Thread;
+use crate::thread::{Thread, ThreadError};
 use crate::value::Value;
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::any::Any;
-use std::mem;
 use std::sync::Arc;
+use std::{iter, mem};
 
 pub trait Object: Send {
     fn get(&self, name: Symbol) -> Option<Value>;
@@ -39,53 +39,44 @@ impl Object {
 pub enum SendError {
     MethodMissing,
     Exception(Value),
+    Thread(ThreadError),
+}
+
+impl From<ThreadError> for SendError {
+    fn from(this: ThreadError) -> SendError {
+        SendError::Thread(this)
+    }
 }
 
 /// Method call arguments.
-#[derive(Debug, Default)]
-pub struct Arguments {
-    pub args: SmallVec<[Value; 32]>,
+pub struct Arguments<'a> {
+    pub args: &'a mut dyn Iterator<Item = Value>,
     pub block: Option<Value>,
 }
 
-impl From<()> for Arguments {
-    fn from(this: ()) -> Arguments {
-        Arguments::default()
+impl<'a> Arguments<'a> {
+    pub fn new(args: &'a mut dyn Iterator<Item = Value>, block: Option<Value>) -> Arguments<'a> {
+        Arguments { args, block }
     }
-}
-impl From<Symbol> for Arguments {
-    fn from(this: Symbol) -> Arguments {
-        let mut args = SmallVec::new();
-        args.push(Value::Symbol(this));
-        Arguments { args, block: None }
-    }
-}
-macro_rules! impl_from_values {
-    ($($i:tt: $v:ty),+$(,)*) => {
-        impl From<($($v,)+)> for Arguments {
-            fn from(this: ($($v,)+)) -> Arguments {
-                let mut args = SmallVec::new();
-                $(args.push(this.$i);)+
-                Arguments { args, block: None }
+
+    pub fn empty() -> Arguments<'static> {
+        struct Empty;
+        impl Iterator for Empty {
+            type Item = Value;
+            fn next(&mut self) -> Option<Value> {
+                None
             }
+        }
+        lazy_static::lazy_static! {
+            static ref EMPTY: Box<Empty> = Box::new(Empty);
+        }
+
+        Arguments {
+            args: unsafe { &mut *(&**EMPTY as *const Empty as *mut Empty) },
+            block: None,
         }
     }
 }
-impl_from_values!(0: Value);
-impl_from_values!(0: Value, 1: Value);
-impl_from_values!(0: Value, 1: Value, 2: Value);
-impl_from_values!(0: Value, 1: Value, 2: Value, 3: Value);
-impl_from_values!(0: Value, 1: Value, 2: Value, 3: Value, 4: Value);
-impl_from_values!(0: Value, 1: Value, 2: Value, 3: Value, 4: Value, 5: Value);
-impl_from_values!(
-    0: Value,
-    1: Value,
-    2: Value,
-    3: Value,
-    4: Value,
-    5: Value,
-    6: Value
-);
 
 /// A Ruby-defined class.
 pub struct RbClass {
@@ -139,15 +130,16 @@ impl Object for RbClass {
     fn send(&mut self, name: Symbol, args: Arguments, _: &mut Thread) -> Result<Value, SendError> {
         match name {
             // TODO: proper argument validation
-            Symbol::METHOD => match args.args.get(0) {
+            Symbol::METHOD => match args.args.next() {
                 Some(Value::Symbol(name)) => {
-                    Ok(self.method(*name).map(Value::Proc).unwrap_or(Value::Nil))
+                    // TODO: proper method resolution
+                    Ok(self.method(name).map(Value::Proc).unwrap_or(Value::Nil))
                 }
                 _ => unimplemented!("raise ArgumentError"),
             },
-            Symbol::DEFINE_METHOD => match (args.args.get(0), args.block) {
+            Symbol::DEFINE_METHOD => match (args.args.next(), args.block) {
                 (Some(Value::Symbol(name)), Some(Value::Proc(ref proc))) => {
-                    self.methods.insert(*name, proc.clone());
+                    self.methods.insert(name, proc.clone());
                     Ok(Value::Nil)
                 }
                 _ => unimplemented!("raise ArgumentError"),
@@ -169,18 +161,75 @@ impl Object for RbClass {
     }
 }
 
+/// Default send implementation.
+pub fn send(
+    mut this: Value,
+    class: &mut Object,
+    name: Symbol,
+    args: Arguments,
+    thread: &mut Thread,
+) -> Result<Value, SendError> {
+    let res = class.send(
+        Symbol::METHOD,
+        Arguments::new(&mut iter::once(Value::Symbol(name)), None),
+        thread,
+    );
+    match res {
+        Ok(Value::Proc(method)) => {
+            thread.call(this, method, args)?;
+            Ok(Value::Nil)
+        }
+        Ok(Value::Nil) => {
+            if name != Symbol::METHOD_MISSING {
+                struct MethodMissingArgs<'a>(Option<Value>, &'a mut dyn Iterator<Item = Value>);
+                impl<'a> Iterator for MethodMissingArgs<'a> {
+                    type Item = Value;
+                    fn next(&mut self) -> Option<Value> {
+                        match self.0.take() {
+                            Some(i) => Some(i),
+                            None => self.1.next(),
+                        }
+                    }
+                }
+
+                let block = args.block;
+                let mut args = MethodMissingArgs(Some(Value::Symbol(name)), args.args);
+
+                this.send(
+                    Symbol::METHOD_MISSING,
+                    Arguments::new(&mut args, block),
+                    thread,
+                )
+            } else {
+                unimplemented!("method_missing is missing")
+            }
+        }
+        res => unimplemented!("handle unexpected class.method response: {:?}", res),
+    }
+}
+
 /// A generic object.
 pub struct RbObject {
     ivars: FnvHashMap<Symbol, Value>,
     class: Ref<Object>,
+    self_ref: Weak<Object>,
 }
 
 impl RbObject {
-    pub fn new(class: Ref<Object>) -> RbObject {
-        RbObject {
+    pub fn new(class: Ref<Object>) -> Ref<Object> {
+        let this = Ref::new(RbObject {
             ivars: FnvHashMap::default(),
             class,
-        }
+            self_ref: unsafe { mem::uninitialized() },
+        });
+        let weak = this.downgrade();
+        mem::forget(mem::replace(
+            &mut Object::downcast_mut::<RbObject>(&mut *this.get())
+                .unwrap()
+                .self_ref,
+            weak,
+        ));
+        this
     }
 }
 
@@ -198,23 +247,13 @@ impl Object for RbObject {
         args: Arguments,
         thread: &mut Thread,
     ) -> Result<Value, SendError> {
-        let res = self.class.get().send(Symbol::METHOD, name.into(), thread);
-        match res {
-            Ok(Value::Proc(_method)) => {
-                eprintln!("TODO: call method on thread somehow");
-                Ok(Value::Nil)
-            }
-            Ok(Value::Nil) => {
-                if name != Symbol::METHOD_MISSING {
-                    let mut args = args;
-                    args.args.insert(0, Value::Symbol(name));
-                    self.send(Symbol::METHOD_MISSING, args, thread)
-                } else {
-                    unimplemented!("method_missing is missing")
-                }
-            }
-            res => unimplemented!("handle unexpected class.method response: {:?}", res),
-        }
+        send(
+            Value::Ref(self.self_ref.upgrade().unwrap()),
+            &mut *self.class.get(),
+            name,
+            args,
+            thread,
+        )
     }
     fn inspect(&self, context: &Context) -> String {
         let class = self.class.get().inspect(context);

@@ -32,6 +32,7 @@ fn main() {
             io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read stdin");
+            let a = ::std::time::Instant::now();
             let compiled_ir = match compile_ir("stdin", input, &mut context.symbols_mut()) {
                 Ok(compiled_ir) => compiled_ir,
                 Err(err) => {
@@ -42,6 +43,7 @@ fn main() {
             println!("{}", compiled_ir.fmt_with_symbols(&context.symbols()));
             let proc = Arc::new(compiled_ir.into());
             println!("{:?}", proc);
+            let b = ::std::time::Instant::now();
             let mut thread = Thread::new_root(Arc::clone(&context), proc);
             loop {
                 match thread.next() {
@@ -56,6 +58,8 @@ fn main() {
                     }
                 }
             }
+            let c = ::std::time::Instant::now();
+            println!("time: {:?} {:?}", b - a, c - b);
         }
     }
 }

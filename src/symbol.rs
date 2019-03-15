@@ -92,6 +92,11 @@ def_common_symbols! {
     LEQ = "<=",
     GT = ">",
     LT = "<",
+    CMP = "<=>",
+    BIT_AND = "&",
+    BIT_OR = "|",
+    BIT_XOR = "^",
+    BIT_INV = "~",
 }
 
 /// A symbol table.

@@ -6,6 +6,7 @@ use crate::symbol::Symbol;
 use crate::value::Value;
 use parking_lot::MutexGuard;
 use smallvec::SmallVec;
+use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 use std::{iter, mem};
@@ -100,6 +101,21 @@ impl Frame {
 }
 
 #[derive(Debug)]
+struct OwnedArguments {
+    args: Vec<Value>,
+    block: Option<Value>,
+}
+
+impl<'a> From<Arguments<'a>> for OwnedArguments {
+    fn from(this: Arguments<'a>) -> OwnedArguments {
+        OwnedArguments {
+            args: this.args.collect(),
+            block: this.block,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Thread {
     context: Arc<Context>,
     frames: Stack<Frame>,
@@ -107,9 +123,10 @@ pub struct Thread {
     rescues: Stack<usize>,
     out_vars: Stack<usize>,
     modules: Stack<Ref<Object>>,
+    out_var: Option<usize>,
     pc: usize,
     arg_builder: ArgumentBuilder,
-    args: Option<Arguments>,
+    args: Option<OwnedArguments>,
 }
 
 type OpResult = Result<Option<Value>, ThreadError>;
@@ -138,6 +155,7 @@ impl Thread {
             rescues: Stack::new(1024),
             out_vars: Stack::new(1024),
             modules: Stack::new(1024),
+            out_var: None,
             pc: 0,
             arg_builder: ArgumentBuilder::new(),
             args: None,
@@ -160,6 +178,16 @@ impl Thread {
         &self.context
     }
 
+    pub fn call(
+        &mut self,
+        this: Value,
+        proc: Arc<Proc>,
+        args: Arguments,
+    ) -> Result<(), ThreadError> {
+        let out = self.out_var.take().unwrap_or(VOID);
+        self.push_frame(proc, this, out, Some(args))
+    }
+
     fn push_frame(
         &mut self,
         proc: Arc<Proc>,
@@ -171,7 +199,7 @@ impl Thread {
         self.pcs.push(self.pc)?;
         self.pc = 0;
         self.out_vars.push(out_var)?;
-        self.args = args;
+        self.args = args.map(|args| args.into());
         Ok(())
     }
 
@@ -282,7 +310,6 @@ impl Thread {
         }
     }
 
-    // TODO: deal with parent vars
     #[inline]
     fn op_load_root(&mut self) -> OpResult {
         let out = self.read_addr()?;
@@ -338,7 +365,7 @@ impl Thread {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
         let mut self_obj = self.frames.top_mut().unwrap().register_mut()[SELF].clone();
-        let self_class = match self_obj.send(Symbol::CLASS, ().into(), self) {
+        let self_class = match self_obj.send(Symbol::CLASS, Arguments::empty(), self) {
             Ok(class) => class,
             Err(_err) => unimplemented!("exception"),
         };
@@ -459,12 +486,14 @@ impl Thread {
     }
     #[inline]
     fn op_call(&mut self) -> OpResult {
-        let args = self.arg_builder.flush(); // TODO: pass args?
         let out = self.read_addr()?;
         let recv = self.read_addr()?;
         let mut recv = self.frames.top_mut().unwrap().register_mut()[recv].clone();
         let method = self.read_symbol()?;
-        match recv.send(method, args, self) {
+        let args = self.arg_builder.take();
+        self.out_var = Some(out);
+        let (mut arg_iter, block) = args.as_args();
+        match recv.send(method, Arguments::new(&mut arg_iter, block), self) {
             Ok(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
             Err(_err) => unimplemented!("exception for {:?}", _err),
         }
@@ -554,7 +583,9 @@ impl Thread {
     }
     #[inline]
     fn op_begin_rescue(&mut self) -> OpResult {
-        unimplemented!()
+        let rescue_addr = self.read_addr()?;
+        self.rescues.push(rescue_addr)?;
+        Ok(None)
     }
     #[inline]
     fn op_rescue_match(&mut self) -> OpResult {
@@ -570,7 +601,8 @@ impl Thread {
     }
     #[inline]
     fn op_end_rescue(&mut self) -> OpResult {
-        unimplemented!()
+        self.rescues.pop();
+        Ok(None)
     }
     #[inline]
     fn op_defined_const(&mut self) -> OpResult {
@@ -632,7 +664,7 @@ impl Thread {
         let res = top_module.get().send(
             Symbol::DEFINE_METHOD,
             Arguments {
-                args: iter::once(Value::Symbol(name)).collect(),
+                args: &mut iter::once(Value::Symbol(name)),
                 block: Some(Value::Proc(proc)),
             },
             self,
@@ -693,7 +725,7 @@ impl<T> Stack<T> {
 
 #[derive(Debug)]
 struct ArgumentBuilder {
-    items: SmallVec<[Value; 32]>,
+    items: VecDeque<Value>,
     hash: Vec<(Value, Value)>,
     block: Option<Value>,
 }
@@ -701,14 +733,14 @@ struct ArgumentBuilder {
 impl ArgumentBuilder {
     fn new() -> ArgumentBuilder {
         ArgumentBuilder {
-            items: SmallVec::new(),
+            items: VecDeque::new(),
             hash: Vec::new(),
             block: None,
         }
     }
 
     fn push_arg(&mut self, arg: Value) {
-        self.items.push(arg);
+        self.items.push_back(arg);
     }
 
     fn push_hash(&mut self, key: Value, value: Value) {
@@ -719,14 +751,37 @@ impl ArgumentBuilder {
         self.block = Some(arg);
     }
 
-    fn flush(&mut self) -> Arguments {
-        let items = mem::replace(&mut self.items, SmallVec::new());
-        let block = mem::replace(&mut self.block, None);
+    fn as_args(self) -> (ArgIter, Option<Value>) {
+        let block = self.block;
+        let items = ArgIter(self.items, self.hash, false);
 
-        if !self.hash.is_empty() {
-            unimplemented!("create hash and append")
+        (items, block)
+    }
+
+    fn take(&mut self) -> ArgumentBuilder {
+        mem::replace(self, ArgumentBuilder::new())
+    }
+}
+
+struct ArgIter(VecDeque<Value>, Vec<(Value, Value)>, bool);
+
+impl<'a> Iterator for ArgIter {
+    type Item = Value;
+    fn next(&mut self) -> Option<Value> {
+        match self.0.remove(0) {
+            Some(item) => Some(item),
+            None => {
+                if self.2 {
+                    self.2 = false;
+                    if !self.1.is_empty() {
+                        unimplemented!("create hash and append")
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
         }
-
-        Arguments { args: items, block }
     }
 }

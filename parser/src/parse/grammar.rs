@@ -787,6 +787,14 @@ sapphire_parser_gen::parser! {
         },
         not!(alt!(keyword, operator_method_name, err: Expression); err: Expression)
             i: method_name
+            // prevent this rule overriding things like `a + b` and making `+ b` a unary expression
+            not!(alt!(
+                do_parse!(
+                    token!(Whitespace) >> token!(OAdd, OSub,) >> token!(Whitespace, Newlines,) >> ()
+                ),
+                do_parse!(token!(OAdd, OSub,) >> ()),
+                err: Expression
+            ); err: Expression)
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {
             let mut args = a.unwrap_or_default();
