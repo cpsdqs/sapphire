@@ -665,19 +665,7 @@ sapphire_parser_gen::parser! {
 
     expression: Expression = {
         token!(PLParen) wss e: compound_statement wss token!(PRParen) => {
-            if e.len() == 1 {
-                // unwrap expression if it’s just a single Statement::Expr
-                let mut e = e;
-                match &e[0] {
-                    Statement::Expr(_) => match e.remove(0) {
-                        Statement::Expr(e) => e,
-                        _ => unreachable!(),
-                    },
-                    _ => Expression::Statements(e),
-                }
-            } else {
-                Expression::Statements(e)
-            }
+            Expression::Statements(e)
         },
         token!(Knot, ONot,) wss e: expression => (Expression::Not(Box::new(e))),
         token!(OBitInv) wss e: expression => (Expression::BitInv(Box::new(e))),
