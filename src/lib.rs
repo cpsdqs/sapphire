@@ -1,5 +1,7 @@
 //! Ruby VM.
 
+pub extern crate sapphire_parser as parser;
+
 pub mod compiler;
 pub mod context;
 pub mod heap;

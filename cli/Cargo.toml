@@ -1,0 +1,10 @@
+[package]
+name = "sapphire-cli"
+version = "0.1.0"
+authors = ["cpsdqs <cpsdqs@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+atty = "0.2"
+rustyline = "3.0"
+sapphire = { path = ".." }
