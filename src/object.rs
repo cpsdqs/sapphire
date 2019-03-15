@@ -175,10 +175,7 @@ pub fn send(
         thread,
     );
     match res {
-        Ok(Value::Proc(method)) => {
-            thread.call(this, method, args)?;
-            Ok(Value::Nil)
-        }
+        Ok(Value::Proc(method)) => Ok(thread.call(this, method, args)?),
         Ok(Value::Nil) => {
             if name != Symbol::METHOD_MISSING {
                 struct MethodMissingArgs<'a>(Option<Value>, &'a mut dyn Iterator<Item = Value>);

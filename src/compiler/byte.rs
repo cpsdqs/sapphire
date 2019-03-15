@@ -414,7 +414,7 @@ impl IRProc {
 
         let block_idx = self.block_var.map_or(None, |var| match var {
             Var::Local(i) => registers.get(&i).map(|i| *i),
-            _ => None
+            _ => None,
         });
 
         Proc {

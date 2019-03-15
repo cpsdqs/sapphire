@@ -2,10 +2,11 @@ use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use sapphire::compiler::compile_ir;
 use sapphire::context::Context;
-use sapphire::object::Object;
+use sapphire::object::{Arguments, Object};
 use sapphire::parser::lex::Lexer;
 use sapphire::parser::parse::parse;
-use sapphire::thread::{Thread, ThreadResult};
+use sapphire::thread::Thread;
+use sapphire::value::Value;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -92,25 +93,21 @@ fn main() {
                             }
 
                             if exec {
-                                let mut thread =
-                                    Thread::new_root(Arc::clone(&context), Arc::new(proc));
-                                let thread_created = Instant::now();
-                                loop {
-                                    match thread.next() {
-                                        ThreadResult::NotReady => (),
-                                        ThreadResult::Ready(res) => {
-                                            println!("-> \x1b[32m{}\x1b[m", res.inspect(&context));
-                                            break;
-                                        }
-                                        ThreadResult::Err(err) => {
-                                            eprintln!("Thread error: {:?}", err);
-                                            break;
-                                        }
+                                let mut thread = Thread::new_empty(Arc::clone(&context));
+                                let start = Instant::now();
+                                match thread.call(
+                                    Value::Ref(context.root().clone()),
+                                    Arc::new(proc),
+                                    Arguments::empty(),
+                                ) {
+                                    Ok(res) => {
+                                        println!("-> \x1b[32m{}\x1b[m", res.inspect(&context))
                                     }
+                                    Err(err) => eprintln!("Thread error: {:?}", err),
                                 }
                                 let end = Instant::now();
 
-                                eprintln!("took {:?}", end - thread_created);
+                                eprintln!("took {:?}", end - start);
                             }
                         }
                     }

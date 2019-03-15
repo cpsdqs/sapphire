@@ -127,9 +127,7 @@ pub struct Thread {
     frames: Stack<Frame>,
     pcs: Stack<usize>,
     rescues: Stack<usize>,
-    out_vars: Stack<usize>,
     modules: Stack<Ref<Object>>,
-    out_var: Option<usize>,
     pc: usize,
     arg_builder: ArgumentBuilder,
     args: Option<OwnedArguments>,
@@ -138,7 +136,7 @@ pub struct Thread {
 type OpResult = Result<Option<Value>, ThreadError>;
 
 #[derive(Debug, Clone)]
-pub enum ThreadResult {
+enum ThreadResult {
     NotReady,
     Ready(Value),
     Err(ThreadError),
@@ -153,26 +151,21 @@ pub enum ThreadError {
 }
 
 impl Thread {
-    pub fn new_empty(context: Arc<Context>) -> Thread {
+    fn alloc(context: Arc<Context>) -> Thread {
         Thread {
             context,
             frames: Stack::new(1024),
             pcs: Stack::new(1024),
             rescues: Stack::new(1024),
-            out_vars: Stack::new(1024),
             modules: Stack::new(1024),
-            out_var: None,
             pc: 0,
             arg_builder: ArgumentBuilder::new(),
             args: None,
         }
     }
 
-    pub fn new_root(context: Arc<Context>, proc: Arc<Proc>) -> Thread {
-        let mut thread = Thread::new_empty(context);
-        thread
-            .push_frame(proc, Value::Ref(thread.context.root().clone()), 0, None)
-            .unwrap();
+    pub fn new_empty(context: Arc<Context>) -> Thread {
+        let mut thread = Thread::alloc(context);
         thread
             .modules
             .push(thread.context.object_class().clone())
@@ -184,37 +177,25 @@ impl Thread {
         &self.context
     }
 
-    pub fn call(
-        &mut self,
-        this: Value,
-        proc: Arc<Proc>,
-        args: Arguments,
-    ) -> Result<(), ThreadError> {
-        let out = self.out_var.take().unwrap_or(VOID);
-        self.push_frame(proc, this, out, Some(args))
-    }
-
     fn push_frame(
         &mut self,
         proc: Arc<Proc>,
         new_self: Value,
-        out_var: usize,
         args: Option<Arguments>,
     ) -> Result<(), ThreadError> {
         self.frames.push(Frame::new(proc, new_self))?;
         self.pcs.push(self.pc)?;
         self.pc = 0;
-        self.out_vars.push(out_var)?;
         self.args = args.map(|args| args.into());
         Ok(())
     }
 
-    fn pop_frame(&mut self) -> Option<usize> {
-        self.frames.pop();
+    fn pop_frame(&mut self) -> Option<Frame> {
+        let res = self.frames.pop();
         if let Some(pc) = self.pcs.pop() {
             self.pc = pc;
         }
-        self.out_vars.pop()
+        res
     }
 
     fn read_addr(&mut self) -> Result<usize, ThreadError> {
@@ -250,7 +231,26 @@ impl Thread {
         }
     }
 
-    pub fn next(&mut self) -> ThreadResult {
+    pub fn call(
+        &mut self,
+        receiver: Value,
+        proc: Arc<Proc>,
+        args: Arguments,
+    ) -> Result<Value, ThreadError> {
+        self.push_frame(proc, receiver, Some(args))?;
+        // TODO: handle args?
+        let result = loop {
+            match self.next() {
+                ThreadResult::NotReady => (),
+                ThreadResult::Err(err) => break Err(err),
+                ThreadResult::Ready(value) => break Ok(value),
+            }
+        };
+        self.pop_frame();
+        result
+    }
+
+    fn next(&mut self) -> ThreadResult {
         let code = match self.frames.top() {
             Some(frame) => match frame.proc.code.get(self.pc) {
                 Some(code) => *code,
@@ -498,7 +498,6 @@ impl Thread {
         let mut recv = self.frames.top_mut().unwrap().register_mut()[recv].clone();
         let method = self.read_symbol()?;
         let args = self.arg_builder.take();
-        self.out_var = Some(out);
         let (mut arg_iter, block) = args.as_args();
         match recv.send(method, Arguments::new(&mut arg_iter, block), self) {
             Ok(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
@@ -561,16 +560,7 @@ impl Thread {
     fn op_return(&mut self) -> OpResult {
         let value = self.read_addr()?;
         let value = self.frames.top_mut().unwrap().register_mut()[value].clone();
-        if let Some(out) = self.pop_frame() {
-            if let Some(frame) = self.frames.top_mut() {
-                frame.register_mut()[out] = value;
-                Ok(None)
-            } else {
-                Ok(Some(value))
-            }
-        } else {
-            Ok(None)
-        }
+        Ok(Some(value))
     }
     #[inline]
     fn op_assign(&mut self) -> OpResult {
@@ -673,7 +663,7 @@ impl Thread {
         if let Err(()) = res {
             unimplemented!("exception")
         }
-        self.push_frame(proc, module, VOID, None)?;
+        self.call(module, proc, Arguments::empty())?;
         Ok(None)
     }
     #[inline]

@@ -498,7 +498,9 @@ impl IROp {
             IROp::ArgAssoc(key, val) => format!("push_arg {} => {};", key, val),
             IROp::ArgBlock(var) => format!("push_arg &{};", var),
             IROp::Call(out, recv, name) => format!("{} = {}.{}();", out, recv, sym!(name)),
-            IROp::CallOne(out, recv, name, arg) => format!("{} = {}.{}({});", out, recv, sym!(name), arg),
+            IROp::CallOne(out, recv, name, arg) => {
+                format!("{} = {}.{}({});", out, recv, sym!(name), arg)
+            }
             IROp::Super(out) => format!("{} = super();", out),
             IROp::Not(out, var) => format!("{} = not {};", out, var),
             IROp::Label(label) => format!("{}", label),
@@ -1571,17 +1573,18 @@ impl IRProc {
             }
             Expression::Begin(body) => Self::expand_body_statement(body, scope, items),
             Expression::Call { member, name, args } => {
-                let single_arg = if args.items.len() == 1 && args.hash.is_empty() && args.block.is_none() {
-                    match &args.items[0] {
-                        Argument::Expr(expr) => {
-                            let expr = Self::expand_expr(expr, scope, items)?;
-                            Some(expr)
+                let single_arg =
+                    if args.items.len() == 1 && args.hash.is_empty() && args.block.is_none() {
+                        match &args.items[0] {
+                            Argument::Expr(expr) => {
+                                let expr = Self::expand_expr(expr, scope, items)?;
+                                Some(expr)
+                            }
+                            _ => None,
                         }
-                        _ => None
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
 
                 if let Some(member) = member {
                     let recv = Self::expand_expr(member, scope, items)?;
@@ -1608,9 +1611,7 @@ impl IRProc {
                         Ident::Local(s) | Ident::MethodOnly(s) | Ident::AssignmentMethod(s) => {
                             (None, Var::SelfRef, scope.symbol(s))
                         }
-                        Ident::Keyword(s) => {
-                            (None, Var::SelfRef, scope.symbol(s))
-                        }
+                        Ident::Keyword(s) => (None, Var::SelfRef, scope.symbol(s)),
                         Ident::Global(name) => {
                             let pre = IROp::LoadGlobal(out, scope.symbol(name));
                             (Some(pre), out, scope.symbol("call"))
