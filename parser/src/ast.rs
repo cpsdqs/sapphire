@@ -16,6 +16,15 @@ pub enum Ident {
     Keyword(&'static str),
 }
 
+impl Ident {
+    pub(crate) fn is_const(&self) -> bool {
+        match self {
+            Ident::Const(_) => true,
+            _ => false,
+        }
+    }
+}
+
 impl<'input> From<Token<'input>> for Ident {
     fn from(token: Token<'input>) -> Ident {
         use Token::*;

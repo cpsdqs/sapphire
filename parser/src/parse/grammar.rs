@@ -749,17 +749,21 @@ sapphire_parser_gen::parser! {
                 _ => panic!("binary operation was reduced to an operator somehow")
             }
         },
-        e: expression ws token!(PDot, PDblColon,) wss i: method_name
+        e: expression ws t: token!(PDot, PDblColon,) wss i: method_name
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {
             let mut args = a.unwrap_or_default();
             if let Some(b) = b {
                 args.block = Some(Box::new(Expression::Block(b)));
             }
-            Expression::Call {
-                member: Some(Box::new(e)),
-                name: i,
-                args,
+            if args.is_empty() && t == &Token::PDblColon && i.is_const() {
+                Expression::SubConst(Box::new(e), i)
+            } else {
+                Expression::Call {
+                    member: Some(Box::new(e)),
+                    name: i,
+                    args,
+                }
             }
         },
         method_definition,
@@ -776,12 +780,15 @@ sapphire_parser_gen::parser! {
         },
         not!(alt!(keyword, operator_method_name, err: Expression); err: Expression)
             i: method_name
-            // prevent this rule overriding things like `a + b` and making `+ b` a unary expression
             not!(alt!(
+                // prevent this rule overriding things like `a + b` and making `+ b` a
+                // unary expression
                 do_parse!(
                     token!(Whitespace) >> token!(OAdd, OSub,) >> token!(Whitespace, Newlines,) >> ()
                 ),
                 do_parse!(token!(OAdd, OSub,) >> ()),
+                // also prevent this rule overriding `a::B` (but not `a ::B`)
+                do_parse!(token!(PDblColon) >> ()),
                 err: Expression
             ); err: Expression)
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
@@ -1103,9 +1110,12 @@ sapphire_parser_gen::parser! {
     }
     const_def_path: DefPath = {
         token!(PDblColon) wss i: token!(IConstant) => (DefPath::Root(i.clone().into())),
-        e: expression ws token!(PDblColon) i: token!(IConstant) => {
-            DefPath::Member(Box::new(e), i.clone().into())
-        },
+        e: expression => [ i => {
+            match e {
+                Expression::SubConst(member, name) => Ok((i, DefPath::Member(member, name))),
+                _ => Err(ParseError::Unexpected(i.without_state(), Expected::ConstDefPath))
+            }
+        }],
         i: token!(IConstant) => (DefPath::Current(i.clone().into()))
     }
 }

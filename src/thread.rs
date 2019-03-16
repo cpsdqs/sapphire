@@ -192,6 +192,7 @@ impl Thread {
         new_self: Value,
         args: Option<Arguments>,
     ) -> Result<(), ThreadError> {
+        // TODO: push modules?
         self.frames.push(Frame::new(proc, new_self))?;
         self.pcs.push(self.pc)?;
         self.pc = 0;
