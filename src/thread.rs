@@ -652,9 +652,13 @@ impl Thread {
         let parent = self.read_addr()?;
         let name = self.read_symbol()?;
         let superclass = self.read_addr()?;
-        let superclass = match &self.frames.top_mut().unwrap().register_mut()[superclass] {
-            Value::Ref(r) => r.clone(), // TODO: maybe verify that it’s actually a class
-            _ => unimplemented!("exception"),
+        let superclass = if superclass == VOID {
+            self.context.object_class().clone()
+        } else {
+            match &self.frames.top_mut().unwrap().register_mut()[superclass] {
+                Value::Ref(r) => r.clone(), // TODO: maybe verify that it’s actually a class… somehow
+                _ => unimplemented!("exception"),
+            }
         };
         let proc = match self.read_static()? {
             Static::Proc(proc) => Arc::clone(proc),

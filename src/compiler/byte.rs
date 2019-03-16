@@ -312,7 +312,7 @@ impl IRProc {
                     code.push(Chunk::Byte(Op::DEF_CLASS));
                     addr_var!(parent);
                     addr_static!(Static::Sym(name));
-                    addr_var!(superclass.unwrap_or(Var::Nil));
+                    addr_var!(superclass.unwrap_or(Var::Void));
                     addr_static!(Static::Proc(Arc::new(proc.into_proc(&Vec::new()))));
                 }
                 IROp::DefMethod(name, proc) => {

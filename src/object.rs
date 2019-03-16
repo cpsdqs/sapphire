@@ -199,6 +199,7 @@ impl Object for RbClass {
                 }
                 _ => unimplemented!("raise ArgumentError"),
             },
+            Symbol::SUPERCLASS => Ok(Value::Ref(self.superclass.clone())),
             _ => Err(SendError::MethodMissing),
         }
     }

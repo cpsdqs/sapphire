@@ -763,6 +763,7 @@ sapphire_parser_gen::parser! {
             }
         },
         method_definition,
+        class_definition,
         if_expression,
         while_expression,
         for_expression,
@@ -1083,5 +1084,28 @@ sapphire_parser_gen::parser! {
     method_parameters: Parameters = {
         token!(PLParen) wss p: opt!(parameter_list) wss token!(PRParen) => (p.unwrap_or_default()),
         p: opt!(parameter_list) ws separator => (p.unwrap_or_default()),
+    }
+
+    class_definition: Expression = {
+        token!(Kclass) wss p: const_def_path
+            ws s: opt!(do_parse!(
+                token!(OLt) >> wss >> s: expression >> (s)
+            ))
+            ws separator
+            wss b: body_statement
+            wss token!(Kend) => {
+            Expression::Class {
+                path: p,
+                superclass: s.map(Box::new),
+                body: b,
+            }
+        }
+    }
+    const_def_path: DefPath = {
+        token!(PDblColon) wss i: token!(IConstant) => (DefPath::Root(i.clone().into())),
+        e: expression ws token!(PDblColon) i: token!(IConstant) => {
+            DefPath::Member(Box::new(e), i.clone().into())
+        },
+        i: token!(IConstant) => (DefPath::Current(i.clone().into()))
     }
 }
