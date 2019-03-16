@@ -102,20 +102,56 @@ impl RbClass {
         }
     }
 
-    pub fn method(&mut self, name: Symbol) -> Option<Arc<Proc>> {
+    pub fn method(&mut self, name: Symbol, thread: &mut Thread) -> Option<Arc<Proc>> {
         if let Some(proc) = self.method_cache.get(&name) {
             return Some(Arc::clone(proc));
         }
         let out = if let Some(proc) = self.methods.get(&name) {
             Some(Arc::clone(proc))
         } else {
-            eprintln!("TODO: resolve method");
-            None
+            let mut method = None;
+            for module in self.modules.iter().rev() {
+                let mut args = iter::once(Value::Symbol(name));
+                match module
+                    .get()
+                    .send(Symbol::METHOD, Arguments::new(&mut args, None), thread)
+                {
+                    Ok(Value::Proc(m)) => {
+                        method = Some(m);
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(err) => unimplemented!("handle {:?}", err),
+                }
+            }
+            if let Some(method) = method {
+                Some(method)
+            } else if !self.is_own_superclass() {
+                let mut args = iter::once(Value::Symbol(name));
+                match self.superclass.get().send(
+                    Symbol::METHOD,
+                    Arguments::new(&mut args, None),
+                    thread,
+                ) {
+                    Ok(Value::Proc(m)) => Some(m),
+                    Ok(Value::Nil) => None,
+                    Ok(_) => unimplemented!("handle invalid return value"),
+                    Err(err) => unimplemented!("handle {:?}", err),
+                }
+            } else {
+                None
+            }
         };
         if let Some(out) = &out {
             self.method_cache.insert(name, Arc::clone(out));
         }
         out
+    }
+
+    fn is_own_superclass(&self) -> bool {
+        // comparing the pointers directly will always return false
+        // (possibly because superclass.as_ptr() returns a fat pointer)
+        self.superclass.as_ptr() as *const () == self as *const _ as *const ()
     }
 }
 
@@ -127,14 +163,19 @@ impl Object for RbClass {
         self.class_vars.insert(name, value);
         Ok(())
     }
-    fn send(&mut self, name: Symbol, args: Arguments, _: &mut Thread) -> Result<Value, SendError> {
+    fn send(
+        &mut self,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
+    ) -> Result<Value, SendError> {
         match name {
             // TODO: proper argument validation
             Symbol::METHOD => match args.args.next() {
-                Some(Value::Symbol(name)) => {
-                    // TODO: proper method resolution
-                    Ok(self.method(name).map(Value::Proc).unwrap_or(Value::Nil))
-                }
+                Some(Value::Symbol(name)) => Ok(self
+                    .method(name, thread)
+                    .map(Value::Proc)
+                    .unwrap_or(Value::Nil)),
                 _ => unimplemented!("raise ArgumentError"),
             },
             Symbol::DEFINE_METHOD => match (args.args.next(), args.block) {
@@ -315,6 +356,20 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         ));
         mem::forget(mem::replace(&mut class_class.class, class_class_ref));
     }
+
+    let object_class_ref = object_class.clone();
+    object_class
+        .get()
+        .set(symbols.symbol("Object"), Value::Ref(object_class_ref))
+        .unwrap();
+    object_class
+        .get()
+        .set(symbols.symbol("Class"), Value::Ref(class_class.clone()))
+        .unwrap();
+    object_class
+        .get()
+        .set(symbols.symbol("Module"), Value::Ref(module_class.clone()))
+        .unwrap();
 
     (object_class, class_class, module_class)
 }

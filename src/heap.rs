@@ -1,33 +1,55 @@
 use crate::object::Object;
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Weak as WeakArc};
 
-#[derive(Default)]
-pub struct Ref<T: ?Sized>(Arc<Mutex<T>>);
+pub struct UnsafeMutableReentrantMutexGuard<'a, T: ?Sized>(ReentrantMutexGuard<'a, T>);
+
+impl<'a, T: ?Sized> Deref for UnsafeMutableReentrantMutexGuard<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.0.deref()
+    }
+}
+
+impl<'a, T: ?Sized> DerefMut for UnsafeMutableReentrantMutexGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *(self.0.deref() as *const T as *mut T) }
+    }
+}
+
+pub type RefGuard<'a, T> = UnsafeMutableReentrantMutexGuard<'a, T>;
 
 #[derive(Default)]
-pub struct Weak<T: ?Sized>(WeakArc<Mutex<T>>);
+pub struct Ref<T: ?Sized>(Arc<ReentrantMutex<T>>);
+
+#[derive(Default)]
+pub struct Weak<T: ?Sized>(WeakArc<ReentrantMutex<T>>);
 
 impl Ref<Object> {
     pub fn new<T: Object + 'static>(this: T) -> Ref<Object> {
-        Ref(Arc::new(Mutex::new(this)))
+        Ref(Arc::new(ReentrantMutex::new(this)))
     }
 }
 
 impl<T> Ref<T> {
     pub fn new_generic(this: T) -> Ref<T> {
-        Ref(Arc::new(Mutex::new(this)))
+        Ref(Arc::new(ReentrantMutex::new(this)))
     }
 }
 
 impl<T: ?Sized> Ref<T> {
-    pub fn get(&self) -> MutexGuard<T> {
-        self.0.lock()
+    pub fn get(&self) -> RefGuard<T> {
+        UnsafeMutableReentrantMutexGuard(self.0.lock())
     }
 
     pub fn downgrade(&self) -> Weak<T> {
         Weak(Arc::downgrade(&self.0))
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        &*self.get()
     }
 }
 

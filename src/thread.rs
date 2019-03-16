@@ -1,10 +1,9 @@
 use crate::context::Context;
-use crate::heap::Ref;
+use crate::heap::{Ref, RefGuard};
 use crate::object::{Arguments, Object, RbClass};
 use crate::proc::{AddressingMode, Op, Proc, Static, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
-use parking_lot::MutexGuard;
 use smallvec::SmallVec;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -31,7 +30,7 @@ pub(crate) enum Register {
 /// Register reference.
 enum RegisterMut<'a> {
     Local(&'a mut RegisterInner),
-    Detached(MutexGuard<'a, RegisterInner>),
+    Detached(RefGuard<'a, RegisterInner>),
 }
 impl<'a> Deref for RegisterMut<'a> {
     type Target = RegisterInner;

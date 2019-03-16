@@ -1,5 +1,4 @@
 use crate::heap::Ref;
-use crate::numeric::FixnumClass;
 use crate::object::{init_root, Object, RbObject};
 use crate::symbol::{Symbol, Symbols};
 use crate::value::Value;
@@ -28,15 +27,14 @@ impl Context {
     pub fn new() -> Context {
         let mut symbols = Symbols::new();
         let (object_class, class_class, module_class) = init_root(&mut symbols);
-        let fixnum_class = Ref::new(FixnumClass::new());
 
         Context {
             symbols: RwLock::new(symbols),
             globals: Ref::new_generic(FnvHashMap::default()),
             root: RbObject::new(object_class.clone()),
-            nil_class: object_class.clone(),  // TODO
-            bool_class: object_class.clone(), // TODO
-            fixnum_class,
+            nil_class: object_class.clone(),    // TODO
+            bool_class: object_class.clone(),   // TODO
+            fixnum_class: object_class.clone(), // TODO
             float_class: object_class.clone(),  // TODO
             symbol_class: object_class.clone(), // TODO
             string_class: object_class.clone(), // TODO
