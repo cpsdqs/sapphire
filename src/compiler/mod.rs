@@ -16,7 +16,6 @@ mod ir;
 /// colors).
 #[derive(Debug)]
 pub struct OwnedParseError {
-    // these two fields are for all intents and purposes immutable
     input: Pin<Box<String>>,
     _tokens: Pin<Box<[Item<'static>]>>,
     error: ParseError<'static>,
@@ -102,14 +101,4 @@ pub fn compile_ir(
 /// Compiles Ruby source code.
 pub fn compile(name: &str, input: String, symbols: &mut Symbols) -> Result<Proc, CompileError> {
     Ok(compile_ir(name, input, symbols)?.into())
-}
-
-#[test]
-fn fdshajkfhdsajk() {
-    let mut symbols = Symbols::new();
-    let s = "puts \"hello world\"";
-    match compile("main", String::from(s), &mut symbols) {
-        Ok(res) => panic!("\n{}\n-> {:?}, {:?}", s, res, symbols),
-        Err(err) => panic!("\n{}", err.fmt_ansi()),
-    }
 }
