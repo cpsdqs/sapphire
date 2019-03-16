@@ -1,3 +1,5 @@
+//! Value types.
+
 use crate::context::Context;
 use crate::heap::Ref;
 use crate::object::{Arguments, Object, SendError};
@@ -7,6 +9,7 @@ use crate::thread::Thread;
 use std::any::Any;
 use std::sync::Arc;
 
+/// A value.
 #[derive(Debug, Clone)]
 pub enum Value {
     Nil,
@@ -20,6 +23,7 @@ pub enum Value {
 }
 
 impl Value {
+    /// Returns true if the value isn’t `nil` or `false`.
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Nil | Value::Bool(false) => false,

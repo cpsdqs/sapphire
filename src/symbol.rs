@@ -1,3 +1,5 @@
+//! Symbols and symbol tables.
+
 use crate::context::Context;
 use crate::object::{Arguments, Object, SendError};
 use crate::thread::Thread;
@@ -6,6 +8,9 @@ use std::any::Any;
 use std::collections::HashMap;
 
 /// A symbol.
+///
+/// These are bound to a [`Context`] (or more specifically, to a [`Symbols`] table) but this will
+/// not be verified at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Symbol(usize);
 
@@ -124,7 +129,7 @@ impl Symbols {
         }
     }
 
-    /// Looks up the symbol name.
+    /// Looks up the symbol name (worst case O(n)).
     pub fn symbol_name(&self, symbol: Symbol) -> Option<&str> {
         self.table
             .iter()

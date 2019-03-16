@@ -1,3 +1,5 @@
+//! String type implementation.
+
 use crate::context::Context;
 use crate::object::{Arguments, Object, SendError};
 use crate::symbol::Symbol;
@@ -14,9 +16,9 @@ impl Object for String {
     }
     fn send(
         &mut self,
-        name: Symbol,
-        args: Arguments,
-        thread: &mut Thread,
+        _name: Symbol,
+        _args: Arguments,
+        _thread: &mut Thread,
     ) -> Result<Value, SendError> {
         unimplemented!("send")
     }

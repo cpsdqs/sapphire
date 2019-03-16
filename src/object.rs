@@ -1,3 +1,5 @@
+//! Objects.
+
 use crate::context::Context;
 use crate::heap::{Ref, Weak};
 use crate::proc::Proc;
@@ -10,25 +12,36 @@ use std::any::Any;
 use std::sync::Arc;
 use std::{iter, mem};
 
-pub trait Object: Send {
+/// A generic object.
+pub trait Object: Send + Any {
+    /// Gets an ivar.
     fn get(&self, name: Symbol) -> Option<Value>;
+    /// Sets an ivar.
     fn set(&mut self, name: Symbol, value: Value) -> Result<(), ()>;
+    /// Sends a message to the object.
     fn send(
         &mut self,
         name: Symbol,
         args: Arguments,
         thread: &mut Thread,
     ) -> Result<Value, SendError>;
+    /// Inspects the object.
     fn inspect(&self, context: &Context) -> String;
 
+    // TODO: remove these when TypeId::type_id() is stable
+    /// Helper method for downcasting.
     fn as_any(&self) -> &Any;
+    /// Helper method for downcasting.
     fn as_any_mut(&mut self) -> &mut Any;
 }
 
 impl Object {
+    /// Attempts to downcast the object to the given type.
     pub fn downcast_ref<T: 'static + Object>(this: &dyn Object) -> Option<&T> {
         this.as_any().downcast_ref()
     }
+
+    /// Attempts to downcast the object to the given type.
     pub fn downcast_mut<T: 'static + Object>(this: &mut dyn Object) -> Option<&mut T> {
         this.as_any_mut().downcast_mut()
     }
@@ -102,6 +115,7 @@ impl RbClass {
         }
     }
 
+    /// Resolves the given method.
     pub fn method(&mut self, name: Symbol, thread: &mut Thread) -> Option<Arc<Proc>> {
         if let Some(proc) = self.method_cache.get(&name) {
             return Some(Arc::clone(proc));
@@ -202,7 +216,7 @@ impl Object for RbClass {
     }
 }
 
-/// Default send implementation.
+/// Default send implementation: will try to call the method or `method_missing`.
 pub fn send(
     mut this: Value,
     class: &mut Object,
@@ -305,7 +319,7 @@ impl Object for RbObject {
     }
 }
 
-/// Creates the object class, class class, and module class.
+/// Creates the object class, class class, and module class (return value is in that order).
 pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object>) {
     let object_class: Ref<Object> = Ref::new(RbClass {
         name: symbols.symbol("Object"),

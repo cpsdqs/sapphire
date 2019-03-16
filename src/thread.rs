@@ -1,3 +1,5 @@
+//! VM threads.
+
 use crate::context::Context;
 use crate::heap::{Ref, RefGuard};
 use crate::object::{Arguments, Object, RbClass};
@@ -120,6 +122,7 @@ impl<'a> From<Arguments<'a>> for OwnedArguments {
     }
 }
 
+/// A thread that will synchronously execute bytecode.
 #[derive(Debug)]
 pub struct Thread {
     context: Arc<Context>,
@@ -141,11 +144,16 @@ enum ThreadResult {
     Err(ThreadError),
 }
 
+/// VM-level errors.
 #[derive(Debug, Clone)]
 pub enum ThreadError {
+    /// Recursion too deep.
     StackOverflow,
+    /// Unrecognized opcode.
     InvalidOperation(u8),
+    /// Bytecode: the referenced static value is of the wrong type.
     InvalidStatic,
+    /// Bytecode ended unexpectedly.
     UnexpectedEnd,
 }
 
@@ -163,7 +171,8 @@ impl Thread {
         }
     }
 
-    pub fn new_empty(context: Arc<Context>) -> Thread {
+    /// Creates a new thread.
+    pub fn new(context: Arc<Context>) -> Thread {
         let mut thread = Thread::alloc(context);
         thread
             .modules
@@ -172,6 +181,7 @@ impl Thread {
         thread
     }
 
+    /// Returns the context to which this thread belongs.
     pub fn context(&self) -> &Context {
         &self.context
     }
@@ -230,6 +240,7 @@ impl Thread {
         }
     }
 
+    /// Runs a proc on this thread.
     pub fn call(
         &mut self,
         receiver: Value,

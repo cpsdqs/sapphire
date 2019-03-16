@@ -1,3 +1,5 @@
+//! Bytecode compiler.
+
 use crate::proc::Proc;
 use crate::symbol::Symbols;
 use sapphire_parser::lex::{Item, Lexer};

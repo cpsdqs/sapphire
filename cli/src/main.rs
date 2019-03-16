@@ -93,7 +93,7 @@ fn main() {
                             }
 
                             if exec {
-                                let mut thread = Thread::new_empty(Arc::clone(&context));
+                                let mut thread = Thread::new(Arc::clone(&context));
                                 let start = Instant::now();
                                 match thread.call(
                                     Value::Ref(context.root().clone()),

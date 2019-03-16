@@ -1,3 +1,5 @@
+//! Object allocation.
+
 use crate::object::Object;
 use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use std::fmt;

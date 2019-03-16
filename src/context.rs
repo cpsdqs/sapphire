@@ -1,3 +1,5 @@
+//! Execution contexts.
+
 use crate::heap::Ref;
 use crate::object::{init_root, Object, RbObject};
 use crate::symbol::{Symbol, Symbols};
@@ -5,6 +7,7 @@ use crate::value::Value;
 use fnv::FnvHashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+/// An execution context: contains globals, a symbol table, and a root object.
 #[derive(Debug)]
 pub struct Context {
     symbols: RwLock<Symbols>,
@@ -24,6 +27,7 @@ pub struct Context {
 }
 
 impl Context {
+    /// Creates a new context.
     pub fn new() -> Context {
         let mut symbols = Symbols::new();
         let (object_class, class_class, module_class) = init_root(&mut symbols);
@@ -45,19 +49,22 @@ impl Context {
         }
     }
 
+    /// Returns the symbol table.
     pub fn symbols(&self) -> RwLockReadGuard<Symbols> {
         self.symbols.read()
     }
 
+    /// Returns the symbol table.
     pub fn symbols_mut(&self) -> RwLockWriteGuard<Symbols> {
         self.symbols.write()
     }
 }
 
 macro_rules! impl_getters {
-    ($($name:ident: $ty:ty,)+) => {
+    ($($(#[$a:meta])* $name:ident: $ty:ty,)+) => {
         impl Context {
             $(
+                $(#[$a])*
                 pub fn $name(&self) -> &$ty {
                     &self.$name
                 }
@@ -67,7 +74,9 @@ macro_rules! impl_getters {
 }
 
 impl_getters! {
+    /// Returns the set of global variables.
     globals: Ref<FnvHashMap<Symbol, Value>>,
+    /// Returns the root object, i.e. top-level `self`.
     root: Ref<Object>,
     nil_class: Ref<Object>,
     bool_class: Ref<Object>,

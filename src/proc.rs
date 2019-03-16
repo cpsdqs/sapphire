@@ -1,4 +1,4 @@
-//! Ruby procs.
+//! Procs.
 
 use crate::context::Context;
 use crate::object::{Arguments, Object, SendError};
@@ -82,9 +82,9 @@ impl Object for Arc<Proc> {
     }
     fn send(
         &mut self,
-        name: Symbol,
-        args: Arguments,
-        thread: &mut Thread,
+        _name: Symbol,
+        _args: Arguments,
+        _thread: &mut Thread,
     ) -> Result<Value, SendError> {
         unimplemented!("send")
     }
@@ -112,6 +112,8 @@ pub enum Static {
     Proc(Arc<Proc>),
 }
 
+/// The proc register addressing mode.
+/// Usually u8, but if there are more than 256 registers (or 256 statics) it’ll switch to u16.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AddressingMode {
     U8,
@@ -119,6 +121,7 @@ pub enum AddressingMode {
 }
 
 impl AddressingMode {
+    /// Byte length of an address with the current mode.
     pub fn addr_len(&self) -> usize {
         match self {
             AddressingMode::U8 => 1,
@@ -129,6 +132,7 @@ impl AddressingMode {
 
 macro_rules! def_op {
     ($($op:ident = $val:expr,)+) => {
+        /// VM operations.
         pub struct Op(u8);
 
         mod _hidden {
@@ -204,17 +208,23 @@ def_op! {
     PARAM_FALLBACK = 0x55,
 }
 
+/// A proc parameter with the register into which the value should be read.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Param {
+    /// A mandatory parameter.
     Mandatory(u16),
+    /// An optional parameter. The method body will contain a fallback routine.
     Optional(u16),
+    /// A splat parameter. There can only be one.
     Splat(u16),
-    // (key, register, mandatory)
+    /// `(key, register, mandatory)`
     Hash(SmallVec<[(Symbol, u16, bool); 8]>),
 }
 
+/// A set of proc parameters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Params {
     pub params: SmallVec<[Param; 8]>,
+    /// The register for the block parameter.
     pub block: u16,
 }

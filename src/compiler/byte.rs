@@ -1,3 +1,5 @@
+//! IR to bytecode conversion.
+
 use crate::compiler::ir::{IROp, IRParamType, IRProc, Var};
 use crate::proc::*;
 use fnv::FnvHashMap;

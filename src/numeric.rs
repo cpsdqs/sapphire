@@ -1,3 +1,5 @@
+//! Numeric type implementations.
+
 use crate::context::Context;
 use crate::object::{Arguments, Object, SendError};
 use crate::symbol::Symbol;
