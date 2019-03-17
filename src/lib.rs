@@ -4,6 +4,7 @@ pub extern crate sapphire_parser as parser;
 
 pub mod compiler;
 pub mod context;
+pub mod exception;
 pub mod heap;
 pub mod numeric;
 pub mod object;

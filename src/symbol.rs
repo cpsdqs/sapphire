@@ -102,6 +102,8 @@ def_common_symbols! {
     BIT_OR = "|",
     BIT_XOR = "^",
     BIT_INV = "~",
+    TO_S = "to_s",
+    TO_I = "to_i",
 }
 
 /// A symbol table.

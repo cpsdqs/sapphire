@@ -1,6 +1,7 @@
 //! Objects.
 
 use crate::context::Context;
+use crate::exception::Exception;
 use crate::heap::{Ref, Weak};
 use crate::proc::Proc;
 use crate::symbol::{Symbol, Symbols};
@@ -48,9 +49,8 @@ impl Object {
 }
 
 /// Method send errors.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SendError {
-    MethodMissing,
     Exception(Value),
     Thread(ThreadError),
 }
@@ -100,19 +100,37 @@ pub struct RbClass {
     method_cache: FnvHashMap<Symbol, Arc<Proc>>,
     class: Ref<Object>,
     superclass: Ref<Object>,
+    self_ref: Weak<Object>,
 }
 
 impl RbClass {
-    pub fn new(name: Symbol, superclass: Ref<Object>, context: &Context) -> RbClass {
-        RbClass {
+    pub fn new(name: Symbol, superclass: Ref<Object>, context: &Context) -> Ref<Object> {
+        Self::new_unchecked(name, superclass, context.class_class().clone())
+    }
+
+    pub(crate) fn new_unchecked(
+        name: Symbol,
+        superclass: Ref<Object>,
+        class: Ref<Object>,
+    ) -> Ref<Object> {
+        let this = Ref::new(RbClass {
             name,
             class_vars: FnvHashMap::default(),
             modules: SmallVec::new(),
             methods: FnvHashMap::default(),
             method_cache: FnvHashMap::default(),
-            class: context.class_class().clone(),
+            class,
             superclass,
-        }
+            self_ref: unsafe { mem::uninitialized() },
+        });
+        let this_ref = this.downgrade();
+        mem::forget(mem::replace(
+            &mut Object::downcast_mut::<RbClass>(&mut *this.get())
+                .unwrap()
+                .self_ref,
+            this_ref,
+        ));
+        this
     }
 
     /// Resolves the given method.
@@ -185,6 +203,11 @@ impl Object for RbClass {
     ) -> Result<Value, SendError> {
         match name {
             // TODO: proper argument validation
+            Symbol::NEW => {
+                let object = RbObject::new(self.self_ref.upgrade().unwrap());
+                // TODO: initialize with args
+                Ok(Value::Ref(object))
+            }
             Symbol::METHOD => match args.args.next() {
                 Some(Value::Symbol(name)) => Ok(self
                     .method(name, thread)
@@ -200,7 +223,7 @@ impl Object for RbClass {
                 _ => unimplemented!("raise ArgumentError"),
             },
             Symbol::SUPERCLASS => Ok(Value::Ref(self.superclass.clone())),
-            _ => Err(SendError::MethodMissing),
+            _ => unimplemented!("send to class"),
         }
     }
     fn inspect(&self, context: &Context) -> String {
@@ -220,12 +243,12 @@ impl Object for RbClass {
 /// Default send implementation: will try to call the method or `method_missing`.
 pub fn send(
     mut this: Value,
-    class: &mut Object,
+    class: Ref<Object>,
     name: Symbol,
     args: Arguments,
     thread: &mut Thread,
 ) -> Result<Value, SendError> {
-    let res = class.send(
+    let res = class.get().send(
         Symbol::METHOD,
         Arguments::new(&mut iter::once(Value::Symbol(name)), None),
         thread,
@@ -254,7 +277,12 @@ pub fn send(
                     thread,
                 )
             } else {
-                unimplemented!("method_missing is missing")
+                let exception = Exception::new(
+                    "method_missing is missing".into(),
+                    thread.trace(),
+                    thread.context().exceptions().no_method_error.clone(),
+                );
+                Err(SendError::Exception(Value::Ref(exception)))
             }
         }
         res => unimplemented!("handle unexpected class.method response: {:?}", res),
@@ -302,7 +330,7 @@ impl Object for RbObject {
     ) -> Result<Value, SendError> {
         send(
             Value::Ref(self.self_ref.upgrade().unwrap()),
-            &mut *self.class.get(),
+            self.class.clone(),
             name,
             args,
             thread,
@@ -330,6 +358,7 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         method_cache: FnvHashMap::default(),
         class: unsafe { mem::uninitialized() },
         superclass: unsafe { mem::uninitialized() },
+        self_ref: unsafe { mem::uninitialized() },
     });
     let module_class: Ref<Object> = Ref::new(RbClass {
         name: symbols.symbol("Module"),
@@ -339,6 +368,7 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         method_cache: FnvHashMap::default(),
         class: unsafe { mem::uninitialized() },
         superclass: object_class.clone(),
+        self_ref: unsafe { mem::uninitialized() },
     });
     let class_class: Ref<Object> = Ref::new(RbClass {
         name: symbols.symbol("Class"),
@@ -348,10 +378,12 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         method_cache: FnvHashMap::default(),
         class: unsafe { mem::uninitialized() },
         superclass: module_class.clone(),
+        self_ref: unsafe { mem::uninitialized() },
     });
 
     let object_class_ref = object_class.clone();
     let class_class_ref = class_class.clone();
+    let module_class_ref = module_class.clone();
 
     {
         let mut object_class_i = object_class.get();
@@ -360,6 +392,20 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         let object_class = Object::downcast_mut::<RbClass>(&mut *object_class_i).unwrap();
         let module_class = Object::downcast_mut::<RbClass>(&mut *module_class_i).unwrap();
         let class_class = Object::downcast_mut::<RbClass>(&mut *class_class_i).unwrap();
+
+        mem::forget(mem::replace(
+            &mut object_class.self_ref,
+            object_class_ref.downgrade(),
+        ));
+        mem::forget(mem::replace(
+            &mut class_class.self_ref,
+            class_class_ref.downgrade(),
+        ));
+        mem::forget(mem::replace(
+            &mut module_class.self_ref,
+            module_class_ref.downgrade(),
+        ));
+
         mem::forget(mem::replace(
             &mut object_class.class,
             class_class_ref.clone(),

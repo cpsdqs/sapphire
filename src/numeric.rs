@@ -1,7 +1,7 @@
 //! Numeric type implementations.
 
 use crate::context::Context;
-use crate::object::{Arguments, Object, SendError};
+use crate::object::{send, Arguments, Object, SendError};
 use crate::symbol::Symbol;
 use crate::thread::Thread;
 use crate::value::Value;
@@ -88,7 +88,13 @@ impl Object for i64 {
                 Some(_) => Ok(Value::Bool(false)),
                 _ => unimplemented!("argument error"),
             },
-            _ => unimplemented!("use normal send"),
+            _ => send(
+                Value::Fixnum(*self),
+                thread.context().fixnum_class().clone(),
+                name,
+                args,
+                thread,
+            ),
         }
     }
     fn inspect(&self, _: &Context) -> String {

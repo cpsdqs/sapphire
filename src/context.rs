@@ -1,5 +1,6 @@
 //! Execution contexts.
 
+use crate::exception::Exceptions;
 use crate::heap::Ref;
 use crate::object::{init_root, Object, RbObject};
 use crate::symbol::{Symbol, Symbols};
@@ -24,6 +25,7 @@ pub struct Context {
     object_class: Ref<Object>,
     class_class: Ref<Object>,
     module_class: Ref<Object>,
+    exceptions: Exceptions,
 }
 
 impl Context {
@@ -31,6 +33,7 @@ impl Context {
     pub fn new() -> Context {
         let mut symbols = Symbols::new();
         let (object_class, class_class, module_class) = init_root(&mut symbols);
+        let exceptions = Exceptions::new(&mut symbols, object_class.clone(), class_class.clone());
 
         Context {
             symbols: RwLock::new(symbols),
@@ -46,6 +49,7 @@ impl Context {
             object_class: object_class,
             class_class: class_class,
             module_class: module_class,
+            exceptions,
         }
     }
 
@@ -88,4 +92,5 @@ impl_getters! {
     object_class: Ref<Object>,
     class_class: Ref<Object>,
     module_class: Ref<Object>,
+    exceptions: Exceptions,
 }

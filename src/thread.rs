@@ -1,8 +1,9 @@
 //! VM threads.
 
 use crate::context::Context;
+use crate::exception::TraceItem;
 use crate::heap::{Ref, RefGuard};
-use crate::object::{Arguments, Object, RbClass};
+use crate::object::{Arguments, Object, RbClass, SendError};
 use crate::proc::{AddressingMode, Op, Proc, Static, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
@@ -135,13 +136,13 @@ pub struct Thread {
     args: Option<OwnedArguments>,
 }
 
-type OpResult = Result<Option<Value>, ThreadError>;
+type OpResult = Result<Option<Value>, SendError>;
 
 #[derive(Debug, Clone)]
 enum ThreadResult {
     NotReady,
     Ready(Value),
-    Err(ThreadError),
+    Err(SendError),
 }
 
 /// VM-level errors.
@@ -184,6 +185,18 @@ impl Thread {
     /// Returns the context to which this thread belongs.
     pub fn context(&self) -> &Context {
         &self.context
+    }
+
+    /// Creates a stack trace.
+    pub fn trace(&self) -> Vec<TraceItem> {
+        let mut trace = Vec::with_capacity(self.frames.buf.len());
+        for (frame, pc) in self.frames.buf.iter().zip(self.pcs.buf.iter()) {
+            trace.push(TraceItem {
+                proc: Arc::clone(&frame.proc),
+                pc: *pc,
+            });
+        }
+        trace
     }
 
     fn push_frame(
@@ -247,7 +260,7 @@ impl Thread {
         receiver: Value,
         proc: Arc<Proc>,
         args: Arguments,
-    ) -> Result<Value, ThreadError> {
+    ) -> Result<Value, SendError> {
         self.push_frame(proc, receiver, Some(args))?;
         // TODO: handle args?
         let result = loop {
@@ -265,7 +278,7 @@ impl Thread {
         let code = match self.frames.top() {
             Some(frame) => match frame.proc.code.get(self.pc) {
                 Some(code) => *code,
-                None => return ThreadResult::Err(ThreadError::UnexpectedEnd),
+                None => return ThreadResult::Err(ThreadError::UnexpectedEnd.into()),
             },
             None => return ThreadResult::Ready(Value::Nil),
         };
@@ -318,7 +331,7 @@ impl Thread {
             Op::DEF_SINGLETON_CLASS => self.op_def_singleton_class(),
             Op::DEF_SINGLETON_METHOD => self.op_def_singleton_method(),
             Op::PARAM_FALLBACK => self.op_param_fallback(),
-            code => return ThreadResult::Err(ThreadError::InvalidOperation(code)),
+            code => return ThreadResult::Err(ThreadError::InvalidOperation(code).into()),
         };
 
         match res {
@@ -411,7 +424,7 @@ impl Thread {
             Static::Str(string) => {
                 self.frames.top_mut().unwrap().register_mut()[out] = Value::String(string.clone())
             }
-            _ => return Err(ThreadError::InvalidStatic),
+            _ => return Err(ThreadError::InvalidStatic.into()),
         }
         Ok(None)
     }
@@ -445,7 +458,7 @@ impl Thread {
                 self.frames.top_mut().unwrap().register_mut()[out] = Value::Fixnum(*value);
                 Ok(None)
             }
-            _ => Err(ThreadError::InvalidStatic),
+            _ => Err(ThreadError::InvalidStatic.into()),
         }
     }
     #[inline]
@@ -456,7 +469,7 @@ impl Thread {
                 self.frames.top_mut().unwrap().register_mut()[out] = Value::Float(*value);
                 Ok(None)
             }
-            _ => Err(ThreadError::InvalidStatic),
+            _ => Err(ThreadError::InvalidStatic.into()),
         }
     }
     #[inline]
@@ -472,7 +485,7 @@ impl Thread {
                 self.frames.top_mut().unwrap().register_mut()[out] = Value::Proc(Arc::new(proc));
                 Ok(None)
             }
-            _ => Err(ThreadError::InvalidStatic),
+            _ => Err(ThreadError::InvalidStatic.into()),
         }
     }
     #[inline]
@@ -512,7 +525,7 @@ impl Thread {
         let (mut arg_iter, block) = args.as_args();
         match recv.send(method, Arguments::new(&mut arg_iter, block), self) {
             Ok(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
-            Err(_err) => unimplemented!("exception for {:?}", _err),
+            Err(err) => return Err(err),
         }
         Ok(None)
     }
@@ -663,9 +676,9 @@ impl Thread {
         };
         let proc = match self.read_static()? {
             Static::Proc(proc) => Arc::clone(proc),
-            _ => return Err(ThreadError::InvalidStatic),
+            _ => return Err(ThreadError::InvalidStatic.into()),
         };
-        let module = Value::Ref(Ref::new(RbClass::new(name, superclass, &self.context)));
+        let module = Value::Ref(RbClass::new(name, superclass, &self.context));
         let res = if parent == VOID {
             self.modules
                 .top_mut()
@@ -686,7 +699,7 @@ impl Thread {
         let name = self.read_symbol()?;
         let proc = match self.read_static()? {
             Static::Proc(proc) => Arc::clone(proc),
-            _ => return Err(ThreadError::InvalidStatic),
+            _ => return Err(ThreadError::InvalidStatic.into()),
         };
         let top_module = self.modules.top_mut().unwrap().clone();
         let res = top_module.get().send(

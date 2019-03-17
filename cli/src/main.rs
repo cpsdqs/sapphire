@@ -2,7 +2,7 @@ use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use sapphire::compiler::compile_ir;
 use sapphire::context::Context;
-use sapphire::object::{Arguments, Object};
+use sapphire::object::{Arguments, Object, SendError};
 use sapphire::parser::lex::Lexer;
 use sapphire::parser::parse::parse;
 use sapphire::thread::Thread;
@@ -103,7 +103,14 @@ fn main() {
                                     Ok(res) => {
                                         println!("-> \x1b[32m{}\x1b[m", res.inspect(&context))
                                     }
-                                    Err(err) => eprintln!("Thread error: {:?}", err),
+                                    Err(err) => match err {
+                                        SendError::Exception(exception) => {
+                                            eprintln!("Exception: {}", exception.inspect(&context));
+                                        }
+                                        SendError::Thread(err) => {
+                                            eprintln!("Thread error: {:?}", err);
+                                        }
+                                    },
                                 }
                                 let end = Instant::now();
 

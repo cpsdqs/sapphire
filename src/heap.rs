@@ -69,6 +69,18 @@ impl<T: ?Sized> Clone for Ref<T> {
 
 impl<T: ?Sized> fmt::Debug for Ref<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Ref<{:?}>", &self.0 as *const Arc<_>)
+        write!(f, "Ref<{:?}>", &*self.0 as *const _)
+    }
+}
+
+impl<T: ?Sized> Clone for Weak<T> {
+    fn clone(&self) -> Self {
+        Weak(WeakArc::clone(&self.0))
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for Weak<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Weak")
     }
 }
