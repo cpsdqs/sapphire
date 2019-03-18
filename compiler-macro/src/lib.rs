@@ -146,10 +146,7 @@ fn quote_statics(statics: Vec<Static<Symbols, ()>>) -> TokenStream {
                 out.append_all(quote! { sapphire_compiler::ConstStatic::Sym(#lit) });
             }
             Static::Proc(proc) => {
-                let lit = quote_proc(
-                    proc.clone_with_parents(Vec::new()),
-                    quote! { &[] },
-                );
+                let lit = quote_proc(proc.clone_with_parents(Vec::new()), quote! { &[] });
                 out.append_all(quote! { sapphire_compiler::ConstStatic::Proc(#lit) });
             }
         }

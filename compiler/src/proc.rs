@@ -285,3 +285,62 @@ pub enum ConstParam {
     Splat(u16),
     Hash(&'static [(usize, u16, bool)]),
 }
+
+impl ConstProc {
+    pub fn new<T: SymbolTable, U>(&self, symbols: &mut T) -> Proc<T, U> {
+        Proc {
+            name: symbols.symbol(self.symbol_name(self.name)),
+            registers: self.registers,
+            block_idx: self.block_idx,
+            statics: self.statics.iter().map(|s| s.new(self, symbols)).collect(),
+            mode: self.mode,
+            code: self.code.to_vec(),
+            params: self.params.new(self, symbols),
+            parent_registers: Vec::new(),
+        }
+    }
+
+    fn symbol_name(&self, id: usize) -> &str {
+        self.symbols.iter().find(|(i, _)| *i == id).unwrap().1
+    }
+}
+
+impl ConstStatic {
+    fn new<T: SymbolTable, U>(&self, proc: &ConstProc, symbols: &mut T) -> Static<T, U> {
+        match self {
+            ConstStatic::Int(i) => Static::Int(*i),
+            ConstStatic::Float(i) => Static::Float(*i),
+            ConstStatic::Str(i) => Static::Str(i.to_string()),
+            ConstStatic::Sym(i) => Static::Sym(symbols.symbol(proc.symbol_name(*i))),
+            ConstStatic::Proc(i) => Static::Proc(Arc::new(i.new(symbols))),
+        }
+    }
+}
+
+impl ConstParams {
+    fn new<T: SymbolTable>(&self, proc: &ConstProc, symbols: &mut T) -> Params<T> {
+        Params {
+            params: self
+                .params
+                .iter()
+                .map(|param| param.new(proc, symbols))
+                .collect(),
+            block: self.block,
+        }
+    }
+}
+
+impl ConstParam {
+    fn new<T: SymbolTable>(&self, proc: &ConstProc, symbols: &mut T) -> Param<T::Symbol> {
+        match self {
+            ConstParam::Mandatory(i) => Param::Mandatory(*i),
+            ConstParam::Optional(i) => Param::Optional(*i),
+            ConstParam::Splat(i) => Param::Splat(*i),
+            ConstParam::Hash(hash) => Param::Hash(
+                hash.iter()
+                    .map(|(id, r, m)| (symbols.symbol(proc.symbol_name(*id)), *r, *m))
+                    .collect(),
+            ),
+        }
+    }
+}
