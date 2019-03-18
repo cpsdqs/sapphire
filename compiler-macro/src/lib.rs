@@ -89,7 +89,7 @@ pub fn compile(tokens: PTokenStream) -> PTokenStream {
     let symbols = quote_symbols(symbols);
     let proc = quote_proc(proc, symbols);
     let out = quote! {
-        const #out: sapphire_compiler::ConstProc = #proc;
+        pub const #out: sapphire_compiler::ConstProc = #proc;
     };
     out.into()
 }
