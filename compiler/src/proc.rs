@@ -255,6 +255,7 @@ impl<T: SymbolTable> PartialEq for Params<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct ConstProc {
     pub symbols: &'static [(usize, &'static str)],
     pub name: usize,
@@ -266,6 +267,7 @@ pub struct ConstProc {
     pub params: ConstParams,
 }
 
+#[derive(Debug)]
 pub enum ConstStatic {
     Int(i64),
     Float(f64),
@@ -274,11 +276,13 @@ pub enum ConstStatic {
     Proc(ConstProc),
 }
 
+#[derive(Debug)]
 pub struct ConstParams {
     pub params: &'static [ConstParam],
     pub block: u16,
 }
 
+#[derive(Debug)]
 pub enum ConstParam {
     Mandatory(u16),
     Optional(u16),

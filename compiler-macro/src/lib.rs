@@ -10,10 +10,8 @@ use syn::*;
 
 struct Input {
     out: Ident,
-    name: LitStr,
     code: LitStr,
     _comma: Token![,],
-    _comma2: Token![,],
 }
 
 impl Parse for Input {
@@ -21,8 +19,6 @@ impl Parse for Input {
         Ok(Input {
             out: input.parse()?,
             _comma: input.parse()?,
-            name: input.parse()?,
-            _comma2: input.parse()?,
             code: input.parse()?,
         })
     }
@@ -61,18 +57,34 @@ pub fn compile(tokens: PTokenStream) -> PTokenStream {
     let input = parse_macro_input!(tokens as Input);
 
     let out = input.out;
-    let name = input.name.value();
     let code = input.code.value();
+
+    if !code.starts_with("def") {
+        panic!("code must be a method definition");
+    }
 
     let mut symbols = Symbols {
         symbols: HashMap::new(),
         sym_counter: 0,
     };
 
-    let proc: Proc<Symbols, ()> = match sapphire_compiler::compile(&name, code, &mut symbols) {
+    let super_proc: Proc<Symbols, ()> = match sapphire_compiler::compile("_", code, &mut symbols) {
         Ok(proc) => proc,
         Err(err) => panic!("Failed to compile:\n{}", err),
     };
+
+    let proc = super_proc
+        .statics
+        .into_iter()
+        .find(|item| match item {
+            Static::Proc(_) => true,
+            _ => false,
+        })
+        .map(|item| match item {
+            Static::Proc(proc) => proc.clone_with_parents(Vec::new()),
+            _ => unreachable!(),
+        })
+        .expect("expected super proc to contain a proc");
 
     let symbols = quote_symbols(symbols);
     let proc = quote_proc(proc, symbols);

@@ -1,10 +1,10 @@
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use sapphire::compiler::compile_ir;
-use sapphire::context::Context;
-use sapphire::object::{Arguments, Object, SendError};
 use sapphire::compiler::parser::lex::Lexer;
 use sapphire::compiler::parser::parse::parse;
+use sapphire::context::Context;
+use sapphire::object::{Arguments, Object, SendError};
 use sapphire::thread::Thread;
 use sapphire::value::Value;
 use std::sync::Arc;
