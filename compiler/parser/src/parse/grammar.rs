@@ -768,6 +768,7 @@ sapphire_parser_gen::parser! {
         },
         method_definition,
         class_definition,
+        module_definition,
         if_expression,
         while_expression,
         for_expression,
@@ -1117,5 +1118,17 @@ sapphire_parser_gen::parser! {
             }
         }],
         i: token!(IConstant) => (DefPath::Current(i.clone().into()))
+    }
+
+    module_definition: Expression = {
+        token!(Kmodule) wss p: const_def_path
+            ws separator
+            wss b: body_statement
+            wss token!(Kend) => {
+            Expression::Module {
+                path: p,
+                body: b,
+            }
+        }
     }
 }

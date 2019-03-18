@@ -91,7 +91,128 @@ impl<'a> Arguments<'a> {
     }
 }
 
-/// A Ruby-defined class.
+/// A generic module.
+pub struct RbModule {
+    name: Symbol,
+    vars: FnvHashMap<Symbol, Value>,
+    modules: SmallVec<[Ref<Object>; 16]>,
+    methods: FnvHashMap<Symbol, Arc<Proc>>,
+    method_cache: FnvHashMap<Symbol, Arc<Proc>>,
+    class: Ref<Object>,
+    self_ref: Weak<Object>,
+}
+
+impl RbModule {
+    pub fn new(name: Symbol, context: &Context) -> Ref<Object> {
+        Self::new_unchecked(name, context.module_class().clone())
+    }
+
+    pub(crate) fn new_unchecked(name: Symbol, class: Ref<Object>) -> Ref<Object> {
+        let this = Ref::new(RbModule {
+            name,
+            vars: FnvHashMap::default(),
+            modules: SmallVec::new(),
+            methods: FnvHashMap::default(),
+            method_cache: FnvHashMap::default(),
+            class,
+            self_ref: unsafe { mem::uninitialized() },
+        });
+        let this_ref = this.downgrade();
+        mem::forget(mem::replace(
+            &mut Object::downcast_mut::<RbModule>(&mut *this.get())
+                .unwrap()
+                .self_ref,
+            this_ref,
+        ));
+        this
+    }
+
+    /// Resolves the given method.
+    pub fn method(&mut self, name: Symbol, thread: &mut Thread) -> Option<Arc<Proc>> {
+        if let Some(proc) = self.method_cache.get(&name) {
+            return Some(Arc::clone(proc));
+        }
+        let out = if let Some(proc) = self.methods.get(&name) {
+            Some(Arc::clone(proc))
+        } else {
+            let mut method = None;
+            for module in self.modules.iter().rev() {
+                let mut args = iter::once(Value::Symbol(name));
+                match module
+                    .get()
+                    .send(Symbol::METHOD, Arguments::new(&mut args, None), thread)
+                {
+                    Ok(Value::Proc(m)) => {
+                        method = Some(m);
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(err) => unimplemented!("handle {:?}", err),
+                }
+            }
+            method
+        };
+        if let Some(out) = &out {
+            self.method_cache.insert(name, Arc::clone(out));
+        }
+        out
+    }
+}
+
+impl Object for RbModule {
+    fn get(&self, name: Symbol) -> Option<Value> {
+        self.vars.get(&name).map(|value| value.clone())
+    }
+    fn set(&mut self, name: Symbol, value: Value) -> Result<(), ()> {
+        self.vars.insert(name, value);
+        Ok(())
+    }
+    fn send(
+        &mut self,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
+    ) -> Result<Value, SendError> {
+        match name {
+            // TODO: proper argument validation
+            Symbol::METHOD => match args.args.next() {
+                Some(Value::Symbol(name)) => Ok(self
+                    .method(name, thread)
+                    .map(Value::Proc)
+                    .unwrap_or(Value::Nil)),
+                _ => unimplemented!("raise ArgumentError"),
+            },
+            Symbol::DEFINE_METHOD => match (args.args.next(), args.block) {
+                (Some(Value::Symbol(name)), Some(Value::Proc(ref proc))) => {
+                    self.methods.insert(name, proc.clone());
+                    Ok(Value::Nil)
+                }
+                _ => unimplemented!("raise ArgumentError"),
+            },
+            name => send(
+                Value::Ref(self.self_ref.upgrade().unwrap()),
+                self.class.clone(),
+                name,
+                args,
+                thread,
+            ),
+        }
+    }
+    fn inspect(&self, context: &Context) -> String {
+        format!(
+            "<Module:{}>",
+            context.symbols().symbol_name(self.name).unwrap_or("?")
+        )
+    }
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
+    }
+}
+
+/// A generic class.
 pub struct RbClass {
     name: Symbol,
     class_vars: FnvHashMap<Symbol, Value>,

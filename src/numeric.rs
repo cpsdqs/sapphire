@@ -154,7 +154,13 @@ impl Object for f64 {
                 Some(_) => Ok(Value::Bool(false)),
                 _ => unimplemented!("argument error"),
             },
-            _ => unimplemented!("use normal send"),
+            _ => send(
+                Value::Float(*self),
+                thread.context().fixnum_class().clone(),
+                name,
+                args,
+                thread,
+            ),
         }
     }
     fn inspect(&self, _: &Context) -> String {

@@ -52,13 +52,11 @@ pub mod value;
 /// ```
 #[macro_export]
 macro_rules! compile {
-    ($code:expr) => {
-        {
-            mod inner {
-                use $crate::compiler as sapphire_compiler;
-                $crate::compiler_macro::compile!(COMPILED, $code);
-            }
-            inner::COMPILED
+    ($code:expr) => {{
+        mod inner {
+            use $crate::compiler as sapphire_compiler;
+            $crate::compiler_macro::compile!(COMPILED, $code);
         }
-    };
+        inner::COMPILED
+    }};
 }

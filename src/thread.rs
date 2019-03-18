@@ -3,7 +3,7 @@
 use crate::context::Context;
 use crate::exception::TraceItem;
 use crate::heap::{Ref, RefGuard};
-use crate::object::{Arguments, Object, RbClass, SendError};
+use crate::object::{Arguments, Object, RbClass, RbModule, SendError};
 use crate::proc::{AddressingMode, CStatic, Op, Proc, Static, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
@@ -659,7 +659,27 @@ impl Thread {
     }
     #[inline]
     fn op_def_module(&mut self) -> OpResult {
-        unimplemented!()
+        let parent = self.read_addr()?;
+        let name = self.read_symbol()?;
+        let proc = match self.read_static()? {
+            CStatic::Proc(proc) => Arc::clone(proc),
+            _ => return Err(ThreadError::InvalidStatic.into()),
+        };
+        let module = Value::Ref(RbModule::new(name, &self.context));
+        let res = if parent == VOID {
+            self.modules
+                .top_mut()
+                .unwrap()
+                .get()
+                .set(name, module.clone())
+        } else {
+            self.frames.top_mut().unwrap().register_mut()[parent].set(name, module.clone())
+        };
+        if let Err(()) = res {
+            unimplemented!("exception")
+        }
+        self.call(module, proc, Arguments::empty())?;
+        Ok(None)
     }
     #[inline]
     fn op_def_class(&mut self) -> OpResult {
