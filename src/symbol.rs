@@ -4,6 +4,7 @@ use crate::context::Context;
 use crate::object::{Arguments, Object, SendError};
 use crate::thread::Thread;
 use crate::value::Value;
+use sapphire_compiler::SymbolTable;
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -137,5 +138,15 @@ impl Symbols {
             .iter()
             .find(|(_, v)| **v == symbol)
             .map(|(k, _)| &**k)
+    }
+}
+
+impl SymbolTable for Symbols {
+    type Symbol = Symbol;
+    fn symbol(&mut self, name: &str) -> Symbol {
+        self.symbol(name)
+    }
+    fn symbol_name(&self, symbol: Symbol) -> Option<&str> {
+        self.symbol_name(symbol)
     }
 }

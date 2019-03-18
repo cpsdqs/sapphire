@@ -8,7 +8,8 @@ edition = "2018"
 fnv = "1.0"
 lazy_static = "1.3"
 parking_lot = "0.7"
-sapphire-parser = { path = "parser" }
+sapphire-compiler = { path = "compiler" }
+sapphire-compiler-macro = { path = "compiler-macro" }
 smallvec = "0.6"
 
 [workspace]

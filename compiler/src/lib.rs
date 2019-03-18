@@ -1,7 +1,7 @@
 //! Bytecode compiler.
 
-use crate::proc::Proc;
-use crate::symbol::Symbols;
+pub extern crate sapphire_parser as parser;
+
 use sapphire_parser::lex::{Item, Lexer};
 use sapphire_parser::parse::{parse, ParseError};
 use std::fmt;
@@ -9,6 +9,9 @@ use std::pin::Pin;
 
 mod byte;
 mod ir;
+mod proc;
+
+pub use proc::*;
 
 /// An owned version of [`ParseError`].
 ///
@@ -68,11 +71,11 @@ impl fmt::Display for CompileError {
 }
 
 /// Compiles Ruby source code into an intermediate representation.
-pub fn compile_ir(
+pub fn compile_ir<T: SymbolTable>(
     name: &str,
     input: String,
-    symbols: &mut Symbols,
-) -> Result<ir::IRProc, CompileError> {
+    symbols: &mut T,
+) -> Result<ir::IRProc<T>, CompileError> {
     let input = Pin::new(Box::new(input));
     let input_ref = unsafe { &*(&*input as *const String) };
 
@@ -99,6 +102,16 @@ pub fn compile_ir(
 }
 
 /// Compiles Ruby source code.
-pub fn compile(name: &str, input: String, symbols: &mut Symbols) -> Result<Proc, CompileError> {
+pub fn compile<T: SymbolTable, U: PartialEq>(
+    name: &str,
+    input: String,
+    symbols: &mut T,
+) -> Result<Proc<T, U>, CompileError> {
     Ok(compile_ir(name, input, symbols)?.into())
+}
+
+pub trait SymbolTable {
+    type Symbol: core::fmt::Debug + Copy + PartialEq;
+    fn symbol(&mut self, name: &str) -> Self::Symbol;
+    fn symbol_name(&self, symbol: Self::Symbol) -> Option<&str>;
 }

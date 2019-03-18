@@ -1,7 +1,8 @@
 //! IR to bytecode conversion.
 
-use crate::compiler::ir::{IROp, IRParamType, IRProc, Var};
+use crate::ir::{IROp, IRParamType, IRProc, Var};
 use crate::proc::*;
+use crate::SymbolTable;
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -12,14 +13,17 @@ enum Chunk {
     Label(usize),
 }
 
-impl Into<Proc> for IRProc {
-    fn into(self) -> Proc {
+impl<T: SymbolTable, U: PartialEq> Into<Proc<T, U>> for IRProc<T> {
+    fn into(self) -> Proc<T, U> {
         self.into_proc(&Vec::new())
     }
 }
 
-impl IRProc {
-    fn into_proc(mut self, parent_vars: &Vec<FnvHashMap<usize, usize>>) -> Proc {
+impl<T: SymbolTable> IRProc<T> {
+    fn into_proc<U: PartialEq>(
+        mut self,
+        parent_vars: &Vec<FnvHashMap<usize, usize>>,
+    ) -> Proc<T, U> {
         let mut code = Vec::with_capacity(self.items.len());
         let mut registers = FnvHashMap::default();
         let mut labels = FnvHashMap::default();

@@ -2,7 +2,7 @@
 
 // TODO: create control flow graph
 
-use crate::symbol::{Symbol, Symbols};
+use crate::SymbolTable;
 use fnv::{FnvHashMap, FnvHashSet};
 use sapphire_parser::ast::*;
 use std::collections::BTreeMap;
@@ -73,15 +73,15 @@ impl fmt::Display for Label {
 ///
 /// Scopes may have a parent scope, in which case variables from the parent scope are accessible.
 /// This should only be used for blocks.
-struct Scope<'a> {
+struct Scope<'a, T: SymbolTable> {
     /// The parent scope. If this is None, symbols must be Some.
-    parent: Option<&'a mut Scope<'a>>,
+    parent: Option<&'a mut Scope<'a, T>>,
     /// Mapping from [Var]s to local variable names.
-    variables: &'a mut FnvHashMap<Var, Symbol>,
+    variables: &'a mut FnvHashMap<Var, T::Symbol>,
     /// List of variables that may be captured in a block.
     captured_vars: &'a mut FnvHashSet<Var>,
     /// The symbols table. If this is None, parent must be Some.
-    symbols: Option<&'a mut Symbols>,
+    symbols: Option<&'a mut T>,
     /// Flag that marks the existence of a child proc that can capture variables.
     may_be_captured: &'a mut bool,
     /// Variable counter for registers.
@@ -93,17 +93,17 @@ struct Scope<'a> {
     block_var: Option<Var>,
 }
 
-impl<'a> Scope<'a> {
+impl<'a, T: SymbolTable> Scope<'a, T> {
     /// Creates a sub-scope with this scope as the parent.
     ///
     /// Safety: 'b must be shorter than 'a
     unsafe fn sub_scope<'b>(
         &mut self,
-        variables: &'b mut FnvHashMap<Var, Symbol>,
+        variables: &'b mut FnvHashMap<Var, T::Symbol>,
         captured_vars: &'b mut FnvHashSet<Var>,
         may_be_captured: &'b mut bool,
-    ) -> Scope<'b> {
-        let borrowck_go_away = mem::transmute::<&mut Scope, &mut Scope>(self);
+    ) -> Scope<'b, T> {
+        let borrowck_go_away = mem::transmute::<&mut Scope<T>, &mut Scope<T>>(self);
         Scope {
             parent: Some(borrowck_go_away),
             variables,
@@ -122,7 +122,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Obtains a symbol by name.
-    fn symbol(&mut self, symbol: &str) -> Symbol {
+    fn symbol(&mut self, symbol: &str) -> T::Symbol {
         if let Some(symbols) = &mut self.symbols {
             symbols.symbol(symbol)
         } else {
@@ -131,7 +131,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Obtains the symbol table.
-    fn symbols(&mut self) -> &mut Symbols {
+    fn symbols(&mut self) -> &mut T {
         if let Some(symbols) = &mut self.symbols {
             symbols
         } else {
@@ -168,7 +168,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Defines a local variable.
-    fn define_local_var(&mut self, name: Symbol) -> MaybeLocalVar {
+    fn define_local_var(&mut self, name: T::Symbol) -> MaybeLocalVar {
         if self.no_local_vars {
             self.parent.as_mut().unwrap().define_local_var(name);
             return self.parent.as_mut().unwrap().capture_var(name).unwrap();
@@ -184,7 +184,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Should only be called by a child scope: captures a local variable.
-    fn capture_var(&mut self, name: Symbol) -> Option<MaybeLocalVar> {
+    fn capture_var(&mut self, name: T::Symbol) -> Option<MaybeLocalVar> {
         match self.local_var(name) {
             Some(MaybeLocalVar::Parent(i, depth)) => Some(MaybeLocalVar::Parent(i, depth + 1)),
             Some(MaybeLocalVar::Local(Var::Local(i))) => {
@@ -196,7 +196,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Returns the local variable with the given name.
-    fn local_var(&mut self, name: Symbol) -> Option<MaybeLocalVar> {
+    fn local_var(&mut self, name: T::Symbol) -> Option<MaybeLocalVar> {
         let var = self
             .variables
             .iter()
@@ -250,31 +250,31 @@ impl fmt::Display for IRError {
 
 /// IR operations.
 #[derive(Debug)]
-pub enum IROp {
+pub enum IROp<T: SymbolTable> {
     /// Loads the root (::) into the local variable.
     LoadRoot(Var),
     /// Loads a boolean value into the local variable.
     LoadBool(Var, bool),
     /// Loads a reference to a global variable into the local variable.
-    LoadGlobal(Var, Symbol),
+    LoadGlobal(Var, T::Symbol),
     /// Loads a reference to a constant into the local variable.
-    LoadConst(Var, Var, Symbol),
+    LoadConst(Var, Var, T::Symbol),
     /// Loads a reference to a class variable into the local variable.
-    LoadClassVar(Var, Symbol),
+    LoadClassVar(Var, T::Symbol),
     /// Loads a reference to an instance variable into the local variable.
-    LoadIVar(Var, Symbol),
+    LoadIVar(Var, T::Symbol),
     /// Loads a literal string into the local variable.
     LoadString(Var, String),
     /// Appends the second string to the first.
     AppendString(Var, Var),
-    /// Loads a literal symbol into the local variable.
-    LoadSymbol(Var, Symbol),
+    /// Loads a literal T::symbol into the local variable.
+    LoadSymbol(Var, T::Symbol),
     /// Loads an i64 number into the local variable.
     LoadI64(Var, i64),
     /// Loads a float number into the local variable.
     LoadFloat(Var, f64),
     /// Loads a block into the local variable.
-    LoadBlock(Var, IRProc),
+    LoadBlock(Var, IRProc<T>),
     /// Loads a variable from a parent proc into the local variable.
     LoadParent(Var, usize, usize),
     /// Pushes a positional argument.
@@ -284,9 +284,9 @@ pub enum IROp {
     /// Pushes a block argument.
     ArgBlock(Var),
     /// Calls a method and loads the result into a local variable.
-    Call(Var, Var, Symbol),
+    Call(Var, Var, T::Symbol),
     /// Calls a method with one argument and loads the result into a local variable.
-    CallOne(Var, Var, Symbol, Var),
+    CallOne(Var, Var, T::Symbol, Var),
     /// Calls super and loads the result into a local variable.
     Super(Var),
     /// Performs the not operation on the second argument and loads it into the first argument.
@@ -304,13 +304,13 @@ pub enum IROp {
     /// Assigns the value of the second to the first.
     Assign(Var, Var),
     /// Assigns the value of the second to the first.
-    AssignGlobal(Symbol, Var),
+    AssignGlobal(T::Symbol, Var),
     /// Assigns the value of the second to the first.
-    AssignConst(Symbol, Var),
+    AssignConst(T::Symbol, Var),
     /// Assigns the value of the second to the first.
-    AssignClassVar(Symbol, Var),
+    AssignClassVar(T::Symbol, Var),
     /// Assigns the value of the second to the first.
-    AssignIVar(Symbol, Var),
+    AssignIVar(T::Symbol, Var),
     /// Assigns to a register in the parent proc.
     AssignParent(usize, usize, Var),
     /// Start of a rescuable section.
@@ -324,31 +324,31 @@ pub enum IROp {
     /// End of a rescuable section.
     EndRescue,
     /// `defined?` for a constant variable.
-    DefinedConst(Var, Symbol),
+    DefinedConst(Var, T::Symbol),
     /// `defined?` for a global variable.
-    DefinedGlobal(Var, Symbol),
+    DefinedGlobal(Var, T::Symbol),
     /// `defined?` for a class variable.
-    DefinedClassVar(Var, Symbol),
+    DefinedClassVar(Var, T::Symbol),
     /// `defined?` for an instance variable.
-    DefinedIVar(Var, Symbol),
+    DefinedIVar(Var, T::Symbol),
     /// Defines a module.
-    DefModule(Var, Symbol, IRProc),
+    DefModule(Var, T::Symbol, IRProc<T>),
     /// Defines a class.
-    DefClass(Var, Symbol, Option<Var>, IRProc),
+    DefClass(Var, T::Symbol, Option<Var>, IRProc<T>),
     /// Defines a method.
     // TODO: params?
-    DefMethod(Symbol, IRProc),
+    DefMethod(T::Symbol, IRProc<T>),
     /// Defines a singleton class.
-    DefSingletonClass(Var, IRProc),
+    DefSingletonClass(Var, IRProc<T>),
     /// Defines a singleton method.
-    DefSingletonMethod(Var, Symbol, IRProc),
+    DefSingletonMethod(Var, T::Symbol, IRProc<T>),
     /// Defines a fallback for a parameter.
     ParamFallback(Var, Label),
     /// Asserts that the given parameter has a value.
     Param(Var),
 }
 
-impl IROp {
+impl<T: SymbolTable> IROp<T> {
     /// Iterates over all variables referenced in the IROp. If they are being written to, the write
     /// flag will be true.
     pub(super) fn for_each_var<F: FnMut(&mut Var, bool)>(&mut self, mut cb: F) {
@@ -471,7 +471,7 @@ impl IROp {
     }
 
     /// Pretty-prints the IROp with the given symbol table.
-    pub fn fmt_with_symbols(&self, symbols: &Symbols) -> String {
+    pub fn fmt_with_symbols(&self, symbols: &T) -> String {
         macro_rules! sym {
             ($i:expr) => {
                 match symbols.symbol_name(*$i) {
@@ -564,12 +564,12 @@ impl IROp {
 
 /// An IR proc.
 #[derive(Debug)]
-pub struct IRProc {
+pub struct IRProc<T: SymbolTable> {
     /// The name of the proc.
     /// This is usually the defined method name, class name, or an internal name.
-    pub(super) name: Symbol,
+    pub(super) name: T::Symbol,
     /// Mapping of register variables to local variable names.
-    pub(super) variables: FnvHashMap<Var, Symbol>,
+    pub(super) variables: FnvHashMap<Var, T::Symbol>,
     /// Block parameter variable.
     pub(super) block_var: Option<Var>,
     /// List of captured variables.
@@ -579,20 +579,30 @@ pub struct IRProc {
     /// If true, this proc is a block.
     pub(super) is_block: bool,
     /// IR ops.
-    pub(super) items: Vec<IROp>,
+    pub(super) items: Vec<IROp<T>>,
     /// Parameter mapping.
-    pub(super) params: IRParams,
+    pub(super) params: IRParams<T::Symbol>,
 }
 
-#[derive(Debug, Default)]
-pub struct IRParams {
+#[derive(Debug)]
+pub struct IRParams<T: fmt::Debug + Copy + PartialEq> {
     pub(super) positional: Vec<(Var, IRParamType)>,
-    pub(super) keyword: Vec<(Symbol, Var, IRParamType)>,
+    pub(super) keyword: Vec<(T, Var, IRParamType)>,
     pub(super) block: Option<Var>,
 }
 
-impl IRParams {
-    fn fmt_with_symbols(&self, symbols: &Symbols) -> String {
+impl<T: fmt::Debug + Copy + PartialEq> Default for IRParams<T> {
+    fn default() -> Self {
+        IRParams {
+            positional: Vec::new(),
+            keyword: Vec::new(),
+            block: None,
+        }
+    }
+}
+
+impl<T: fmt::Debug + Copy + PartialEq> IRParams<T> {
+    fn fmt_with_symbols<U: SymbolTable<Symbol = T>>(&self, symbols: &U) -> String {
         use std::fmt::Write;
         let mut f = String::from("params: ");
         for (var, ty) in &self.positional {
@@ -632,13 +642,13 @@ pub enum IRParamType {
     Splat,
 }
 
-impl IRProc {
+impl<T: SymbolTable> IRProc<T> {
     /// Creates a new proc with the given list of statements.
     pub fn new(
-        name: Symbol,
+        name: T::Symbol,
         statements: &[Statement],
-        symbols: &mut Symbols,
-    ) -> Result<IRProc, IRError> {
+        symbols: &mut T,
+    ) -> Result<IRProc<T>, IRError> {
         let mut variables = FnvHashMap::default();
         let mut captured_vars = FnvHashSet::default();
         let mut items = Vec::new();
@@ -679,11 +689,11 @@ impl IRProc {
 
     /// Creates a proc with a body statement.
     fn new_with_body(
-        name: Symbol,
+        name: T::Symbol,
         body: &BodyStatement,
-        symbols: &mut Symbols,
+        symbols: &mut T,
         params: Option<&Parameters>,
-    ) -> Result<IRProc, IRError> {
+    ) -> Result<IRProc<T>, IRError> {
         let mut variables = FnvHashMap::default();
         let mut captured_vars = FnvHashSet::default();
         let mut items = Vec::new();
@@ -1001,8 +1011,8 @@ impl IRProc {
     fn expand_statement(
         statement: &Statement,
         out: Option<Var>,
-        scope: &mut Scope,
-        items: &mut Vec<IROp>,
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
     ) -> Result<(), IRError> {
         match statement {
             Statement::Expr(expr) => {
@@ -1084,8 +1094,8 @@ impl IRProc {
     fn expand_statements(
         statements: &[Statement],
         out: Var,
-        scope: &mut Scope,
-        items: &mut Vec<IROp>,
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
     ) -> Result<(), IRError> {
         for (i, statement) in statements.iter().enumerate() {
             let is_last = i == statements.len() - 1;
@@ -1102,8 +1112,8 @@ impl IRProc {
 
     fn expand_expr(
         expr: &Expression,
-        scope: &mut Scope,
-        items: &mut Vec<IROp>,
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
     ) -> Result<Var, IRError> {
         match expr {
             Expression::Variable(ident) => Self::load_var(ident, scope, items),
@@ -1877,8 +1887,8 @@ impl IRProc {
     fn expand_assignment(
         lhs: &LeftHandSide,
         rhs: Var,
-        scope: &mut Scope,
-        items: &mut Vec<IROp>,
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
     ) -> Result<Var, IRError> {
         match lhs {
             LeftHandSide::Var(ident) => match ident {
@@ -1960,8 +1970,8 @@ impl IRProc {
 
     fn expand_body_statement(
         body: &BodyStatement,
-        scope: &mut Scope,
-        items: &mut Vec<IROp>,
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
     ) -> Result<Var, IRError> {
         let rescue_label = scope.next_label();
         let else_label = scope.next_label();
@@ -2022,8 +2032,8 @@ impl IRProc {
 
     fn expand_args(
         args: &Arguments,
-        scope: &mut Scope,
-        items: &mut Vec<IROp>,
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
     ) -> Result<(), IRError> {
         let mut arg_items = Vec::new();
         for item in args.items.iter().rev() {
@@ -2056,9 +2066,9 @@ impl IRProc {
 
     fn expand_params(
         params: &Parameters,
-        scope: &mut Scope,
-        items: &mut Vec<IROp>,
-    ) -> Result<IRParams, IRError> {
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
+    ) -> Result<IRParams<T::Symbol>, IRError> {
         let mut positional = Vec::new();
         let mut keyword = Vec::new();
         let mut block = None;
@@ -2157,7 +2167,11 @@ impl IRProc {
         })
     }
 
-    fn load_var(ident: &Ident, scope: &mut Scope, items: &mut Vec<IROp>) -> Result<Var, IRError> {
+    fn load_var(
+        ident: &Ident,
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
+    ) -> Result<Var, IRError> {
         match ident {
             Ident::Local(name) => {
                 let name = scope.symbol(name);
@@ -2213,9 +2227,9 @@ impl IRProc {
     }
 
     fn read_local_var(
-        name: Symbol,
-        scope: &mut Scope,
-        items: &mut Vec<IROp>,
+        name: T::Symbol,
+        scope: &mut Scope<T>,
+        items: &mut Vec<IROp<T>>,
     ) -> Result<Option<Var>, IRError> {
         Ok(match scope.local_var(name) {
             Some(MaybeLocalVar::Local(var)) => Some(var),
@@ -2421,7 +2435,7 @@ impl IRProc {
         }
     }
 
-    pub fn fmt_with_symbols(&self, symbols: &Symbols) -> String {
+    pub fn fmt_with_symbols(&self, symbols: &T) -> String {
         use std::fmt::Write;
 
         let mut f = String::from("Proc {\n");

@@ -4,7 +4,7 @@ use crate::context::Context;
 use crate::exception::TraceItem;
 use crate::heap::{Ref, RefGuard};
 use crate::object::{Arguments, Object, RbClass, SendError};
-use crate::proc::{AddressingMode, Op, Proc, Static, SELF, VOID};
+use crate::proc::{AddressingMode, CStatic, Op, Proc, Static, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
 use smallvec::SmallVec;
@@ -25,7 +25,7 @@ type RegisterInner = SmallVec<[Value; 16]>;
 /// Types of registers: local or detached.
 /// Registers are detached if the local variable scope is captured in a block.
 #[derive(Debug, Clone)]
-pub(crate) enum Register {
+pub enum Register {
     Local(RegisterInner),
     Detached(Ref<RegisterInner>),
 }
@@ -249,7 +249,7 @@ impl Thread {
 
     fn read_symbol(&mut self) -> Result<Symbol, ThreadError> {
         match self.read_static()? {
-            Static::Sym(sym) => Ok(*sym),
+            CStatic::Sym(sym) => Ok(*sym),
             _ => Err(ThreadError::InvalidStatic),
         }
     }
@@ -421,7 +421,7 @@ impl Thread {
     fn op_load_string(&mut self) -> OpResult {
         let out = self.read_addr()?;
         match self.read_static()? {
-            Static::Str(string) => {
+            CStatic::Str(string) => {
                 self.frames.top_mut().unwrap().register_mut()[out] = Value::String(string.clone())
             }
             _ => return Err(ThreadError::InvalidStatic.into()),
@@ -454,7 +454,7 @@ impl Thread {
     fn op_load_i64(&mut self) -> OpResult {
         let out = self.read_addr()?;
         match self.read_static()? {
-            Static::Int(value) => {
+            CStatic::Int(value) => {
                 self.frames.top_mut().unwrap().register_mut()[out] = Value::Fixnum(*value);
                 Ok(None)
             }
@@ -465,7 +465,7 @@ impl Thread {
     fn op_load_float(&mut self) -> OpResult {
         let out = self.read_addr()?;
         match self.read_static()? {
-            Static::Float(value) => {
+            CStatic::Float(value) => {
                 self.frames.top_mut().unwrap().register_mut()[out] = Value::Float(*value);
                 Ok(None)
             }
@@ -480,7 +480,7 @@ impl Thread {
         let mut parent_registers = frame.proc.parent_registers.clone();
         parent_registers.push(register);
         match self.read_static()? {
-            Static::Proc(value) => {
+            CStatic::Proc(value) => {
                 let proc = value.clone_with_parents(parent_registers);
                 self.frames.top_mut().unwrap().register_mut()[out] = Value::Proc(Arc::new(proc));
                 Ok(None)
@@ -675,7 +675,7 @@ impl Thread {
             }
         };
         let proc = match self.read_static()? {
-            Static::Proc(proc) => Arc::clone(proc),
+            CStatic::Proc(proc) => Arc::clone(proc),
             _ => return Err(ThreadError::InvalidStatic.into()),
         };
         let module = Value::Ref(RbClass::new(name, superclass, &self.context));
@@ -698,7 +698,7 @@ impl Thread {
     fn op_def_method(&mut self) -> OpResult {
         let name = self.read_symbol()?;
         let proc = match self.read_static()? {
-            Static::Proc(proc) => Arc::clone(proc),
+            CStatic::Proc(proc) => Arc::clone(proc),
             _ => return Err(ThreadError::InvalidStatic.into()),
         };
         let top_module = self.modules.top_mut().unwrap().clone();

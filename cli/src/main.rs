@@ -3,8 +3,8 @@ use rustyline::Editor;
 use sapphire::compiler::compile_ir;
 use sapphire::context::Context;
 use sapphire::object::{Arguments, Object, SendError};
-use sapphire::parser::lex::Lexer;
-use sapphire::parser::parse::parse;
+use sapphire::compiler::parser::lex::Lexer;
+use sapphire::compiler::parser::parse::parse;
 use sapphire::thread::Thread;
 use sapphire::value::Value;
 use std::sync::Arc;
@@ -74,7 +74,7 @@ fn main() {
                                 }
                             }
 
-                            let proc = match compile_ir("main", line, &mut context.symbols_mut()) {
+                            let proc = match compile_ir("main", line, &mut *context.symbols_mut()) {
                                 Ok(ir) => ir,
                                 Err(err) => {
                                     eprintln!("{}", err.fmt_ansi());
