@@ -7,7 +7,9 @@ use crate::proc::Proc;
 use crate::symbol::Symbol;
 use crate::thread::Thread;
 use std::any::Any;
-use std::sync::Arc;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::{mem, slice};
 
 /// A value.
 #[derive(Debug, Clone)]
@@ -18,7 +20,7 @@ pub enum Value {
     Float(f64),
     Symbol(Symbol),
     String(String),
-    Proc(Arc<Proc>),
+    Proc(Proc),
     Ref(Ref<dyn Object>),
 }
 
@@ -29,6 +31,15 @@ impl Value {
             Value::Nil | Value::Bool(false) => false,
             _ => true,
         }
+    }
+
+    /// The value of `object_id`.
+    pub fn object_id(&self) -> i64 {
+        let self_ptr = self as *const Value as *const u8;
+        let self_buf = unsafe { slice::from_raw_parts(self_ptr, mem::size_of::<Value>()) };
+        let mut hasher = DefaultHasher::new();
+        self_buf.hash(&mut hasher);
+        unsafe { mem::transmute::<u64, i64>(hasher.finish()) }
     }
 }
 

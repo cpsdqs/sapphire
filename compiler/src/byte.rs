@@ -282,7 +282,7 @@ impl<T: SymbolTable> IRProc<T> {
                     code.push(Chunk::Byte(Op::RESCUE_BIND));
                     addr_var!(var);
                 }
-                IROp::ContinueRescue => code.push(Chunk::Byte(Op::CONTINUE_RESCUE)),
+                IROp::ContinueUnwind => code.push(Chunk::Byte(Op::CONTINUE_UNWIND)),
                 IROp::EndRescue => {
                     code.push(Chunk::Byte(Op::END_RESCUE));
                 }

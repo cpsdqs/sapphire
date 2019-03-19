@@ -5,6 +5,7 @@ use sapphire::compiler::parser::lex::Lexer;
 use sapphire::compiler::parser::parse::parse;
 use sapphire::context::Context;
 use sapphire::object::{Arguments, Object, SendError};
+use sapphire::proc::Proc;
 use sapphire::thread::Thread;
 use sapphire::value::Value;
 use std::sync::Arc;
@@ -86,7 +87,7 @@ fn main() {
                                 eprintln!("{}", proc.fmt_with_symbols(&context.symbols()));
                             }
 
-                            let proc = proc.into();
+                            let proc = Proc::Sapphire(Arc::new(proc.into()));
 
                             if byte {
                                 eprintln!("{:?}", proc);
@@ -97,7 +98,7 @@ fn main() {
                                 let start = Instant::now();
                                 match thread.call(
                                     Value::Ref(context.root().clone()),
-                                    Arc::new(proc),
+                                    proc,
                                     Arguments::empty(),
                                 ) {
                                     Ok(res) => {

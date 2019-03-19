@@ -10,7 +10,6 @@ use crate::value::Value;
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::any::Any;
-use std::sync::Arc;
 use std::{iter, mem};
 
 /// A generic object.
@@ -91,13 +90,50 @@ impl<'a> Arguments<'a> {
     }
 }
 
+#[macro_export]
+macro_rules! read_args {
+    ($args:expr, $thread:expr; $($rest:ident)*) => {
+        read_args!(__impl $args, $thread, 0; $($rest)*)
+    };
+    ($args:expr, $thread:expr; -) => {
+        read_args!(__impl $args, $thread, 0 => __end)
+    };
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident) => {
+        let $var = match $args.args.next() {
+            Some(arg) => arg,
+            None => {
+                return Err(SendError::Exception(Value::Ref(Exception::new(
+                    format!("Expected an argument for {}", stringify!($var)),
+                    $thread.trace(),
+                    $thread.context().exceptions().argument_error.clone(),
+                ))));
+            }
+        };
+        read_args!(__impl $args, $thread, $c => __end);
+    };
+    (__impl $args:expr, $thread:expr, $c:expr => __end) => {
+        match $args.args.next() {
+            Some(_) => return Err(SendError::Exception(Value::Ref(Exception::new(
+                match $c {
+                    0 => format!("Expected no arguments"),
+                    1 => format!("Expected at most one argument"),
+                    c => format!("Expected at most {} arguments", c),
+                },
+                $thread.trace(),
+                $thread.context().exceptions().argument_error.clone(),
+            )))),
+            None => ()
+        }
+    }
+}
+
 /// A generic module.
 pub struct RbModule {
     name: Symbol,
     vars: FnvHashMap<Symbol, Value>,
     modules: SmallVec<[Ref<Object>; 16]>,
-    methods: FnvHashMap<Symbol, Arc<Proc>>,
-    method_cache: FnvHashMap<Symbol, Arc<Proc>>,
+    methods: FnvHashMap<Symbol, Proc>,
+    method_cache: FnvHashMap<Symbol, Proc>,
     class: Ref<Object>,
     self_ref: Weak<Object>,
 }
@@ -128,12 +164,12 @@ impl RbModule {
     }
 
     /// Resolves the given method.
-    pub fn method(&mut self, name: Symbol, thread: &mut Thread) -> Option<Arc<Proc>> {
+    pub fn method(&mut self, name: Symbol, thread: &mut Thread) -> Option<Proc> {
         if let Some(proc) = self.method_cache.get(&name) {
-            return Some(Arc::clone(proc));
+            return Some(proc.clone());
         }
         let out = if let Some(proc) = self.methods.get(&name) {
-            Some(Arc::clone(proc))
+            Some(proc.clone())
         } else {
             let mut method = None;
             for module in self.modules.iter().rev() {
@@ -153,9 +189,13 @@ impl RbModule {
             method
         };
         if let Some(out) = &out {
-            self.method_cache.insert(name, Arc::clone(out));
+            self.method_cache.insert(name, out.clone());
         }
         out
+    }
+
+    pub fn def_method(&mut self, name: Symbol, method: Proc) {
+        self.methods.insert(name, method);
     }
 }
 
@@ -183,8 +223,15 @@ impl Object for RbModule {
                 _ => unimplemented!("raise ArgumentError"),
             },
             Symbol::DEFINE_METHOD => match (args.args.next(), args.block) {
-                (Some(Value::Symbol(name)), Some(Value::Proc(ref proc))) => {
-                    self.methods.insert(name, proc.clone());
+                (Some(Value::Symbol(name)), Some(Value::Proc(proc))) => {
+                    self.def_method(name, proc);
+                    Ok(Value::Nil)
+                }
+                _ => unimplemented!("raise ArgumentError"),
+            },
+            Symbol::INCLUDE => match args.args.next() {
+                Some(Value::Ref(object)) => {
+                    self.modules.push(object);
                     Ok(Value::Nil)
                 }
                 _ => unimplemented!("raise ArgumentError"),
@@ -217,8 +264,8 @@ pub struct RbClass {
     name: Symbol,
     class_vars: FnvHashMap<Symbol, Value>,
     modules: SmallVec<[Ref<Object>; 16]>,
-    methods: FnvHashMap<Symbol, Arc<Proc>>,
-    method_cache: FnvHashMap<Symbol, Arc<Proc>>,
+    methods: FnvHashMap<Symbol, Proc>,
+    method_cache: FnvHashMap<Symbol, Proc>,
     class: Ref<Object>,
     superclass: Ref<Object>,
     self_ref: Weak<Object>,
@@ -255,12 +302,12 @@ impl RbClass {
     }
 
     /// Resolves the given method.
-    pub fn method(&mut self, name: Symbol, thread: &mut Thread) -> Option<Arc<Proc>> {
+    pub fn method(&mut self, name: Symbol, thread: &mut Thread) -> Option<Proc> {
         if let Some(proc) = self.method_cache.get(&name) {
-            return Some(Arc::clone(proc));
+            return Some(proc.clone());
         }
         let out = if let Some(proc) = self.methods.get(&name) {
-            Some(Arc::clone(proc))
+            Some(proc.clone())
         } else {
             let mut method = None;
             for module in self.modules.iter().rev() {
@@ -296,9 +343,13 @@ impl RbClass {
             }
         };
         if let Some(out) = &out {
-            self.method_cache.insert(name, Arc::clone(out));
+            self.method_cache.insert(name, out.clone());
         }
         out
+    }
+
+    pub fn def_method(&mut self, name: Symbol, method: Proc) {
+        self.methods.insert(name, method);
     }
 
     fn is_own_superclass(&self) -> bool {
@@ -337,8 +388,15 @@ impl Object for RbClass {
                 _ => unimplemented!("raise ArgumentError"),
             },
             Symbol::DEFINE_METHOD => match (args.args.next(), args.block) {
-                (Some(Value::Symbol(name)), Some(Value::Proc(ref proc))) => {
-                    self.methods.insert(name, proc.clone());
+                (Some(Value::Symbol(name)), Some(Value::Proc(proc))) => {
+                    self.def_method(name, proc);
+                    Ok(Value::Nil)
+                }
+                _ => unimplemented!("raise ArgumentError"),
+            },
+            Symbol::INCLUDE => match args.args.next() {
+                Some(Value::Ref(object)) => {
+                    self.modules.push(object);
                     Ok(Value::Nil)
                 }
                 _ => unimplemented!("raise ArgumentError"),

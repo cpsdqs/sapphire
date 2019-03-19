@@ -105,6 +105,10 @@ def_common_symbols! {
     BIT_INV = "~",
     TO_S = "to_s",
     TO_I = "to_i",
+    IS_A = "is_a?",
+    INCLUDE = "include",
+    RAISE = "raise",
+    BLOCK_GIVEN = "block_given?",
 }
 
 /// A symbol table.

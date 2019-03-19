@@ -16,8 +16,9 @@ use std::{iter, mem};
 /// A stack frame.
 #[derive(Debug)]
 struct Frame {
-    proc: Arc<Proc>,
+    proc: Proc,
     register: Register,
+    block_given: bool,
 }
 
 type RegisterInner = SmallVec<[Value; 16]>;
@@ -70,15 +71,17 @@ impl PartialEq for Register {
 }
 
 impl Frame {
-    fn new(proc: Arc<Proc>, current_self: Value) -> Frame {
-        let mut register = SmallVec::with_capacity(proc.registers);
-        for _ in 0..proc.registers {
+    fn new(proc: Proc, current_self: Value, block_given: bool) -> Frame {
+        let registers = proc.sapphire().unwrap().registers;
+        let mut register = SmallVec::with_capacity(registers);
+        for _ in 0..registers {
             register.push(Value::Nil);
         }
         register[SELF] = current_self;
         Frame {
             register: Register::Local(register),
             proc,
+            block_given,
         }
     }
 
@@ -129,11 +132,12 @@ pub struct Thread {
     context: Arc<Context>,
     frames: Stack<Frame>,
     pcs: Stack<usize>,
-    rescues: Stack<usize>,
+    rescues: Stack<(usize, usize)>,
     modules: Stack<Ref<Object>>,
     pc: usize,
     arg_builder: ArgumentBuilder,
     args: Option<OwnedArguments>,
+    exception: Option<Value>,
 }
 
 type OpResult = Result<Option<Value>, SendError>;
@@ -150,6 +154,8 @@ enum ThreadResult {
 pub enum ThreadError {
     /// Recursion too deep.
     StackOverflow,
+    /// Rescue attempt without any exception raised.
+    InvalidRescueOp,
     /// Unrecognized opcode.
     InvalidOperation(u8),
     /// Bytecode: the referenced static value is of the wrong type.
@@ -169,6 +175,7 @@ impl Thread {
             pc: 0,
             arg_builder: ArgumentBuilder::new(),
             args: None,
+            exception: None,
         }
     }
 
@@ -192,21 +199,33 @@ impl Thread {
         let mut trace = Vec::with_capacity(self.frames.buf.len());
         for (frame, pc) in self.frames.buf.iter().zip(self.pcs.buf.iter()) {
             trace.push(TraceItem {
-                proc: Arc::clone(&frame.proc),
+                proc: frame.proc.clone(),
                 pc: *pc,
             });
         }
         trace
     }
 
+    /// Returns true if the current proc has a block given.
+    pub fn is_block_given(&self) -> bool {
+        for frame in self.frames.buf.iter().rev() {
+            match frame.proc.sapphire().map_or(None, |p| p.block_idx) {
+                None => continue,
+                Some(_) => return frame.block_given,
+            }
+        }
+        false
+    }
+
     fn push_frame(
         &mut self,
-        proc: Arc<Proc>,
+        proc: Proc,
         new_self: Value,
         args: Option<Arguments>,
     ) -> Result<(), ThreadError> {
         // TODO: push modules?
-        self.frames.push(Frame::new(proc, new_self))?;
+        let block_given = args.as_ref().map_or(false, |args| args.block.is_some());
+        self.frames.push(Frame::new(proc, new_self, block_given))?;
         self.pcs.push(self.pc)?;
         self.pc = 0;
         self.args = args.map(|args| args.into());
@@ -223,7 +242,7 @@ impl Thread {
 
     fn read_addr(&mut self) -> Result<usize, ThreadError> {
         let proc = &self.frames.top().expect("read_addr without frame").proc;
-
+        let proc = proc.sapphire().unwrap();
         match proc.mode {
             AddressingMode::U8 => match proc.code.get(self.pc) {
                 Some(i) => {
@@ -244,7 +263,7 @@ impl Thread {
 
     fn read_static(&mut self) -> Result<&Static, ThreadError> {
         let index = self.read_addr()?;
-        Ok(&self.frames.top().unwrap().proc.statics[index])
+        Ok(&self.frames.top().unwrap().proc.sapphire().unwrap().statics[index])
     }
 
     fn read_symbol(&mut self) -> Result<Symbol, ThreadError> {
@@ -258,25 +277,29 @@ impl Thread {
     pub fn call(
         &mut self,
         receiver: Value,
-        proc: Arc<Proc>,
+        proc: Proc,
         args: Arguments,
     ) -> Result<Value, SendError> {
-        self.push_frame(proc, receiver, Some(args))?;
-        // TODO: handle args?
-        let result = loop {
-            match self.next() {
-                ThreadResult::NotReady => (),
-                ThreadResult::Err(err) => break Err(err),
-                ThreadResult::Ready(value) => break Ok(value),
+        match proc {
+            Proc::Sapphire(_) => {
+                self.push_frame(proc, receiver, Some(args))?;
+                let result = loop {
+                    match self.next() {
+                        ThreadResult::NotReady => (),
+                        ThreadResult::Err(err) => break Err(err),
+                        ThreadResult::Ready(value) => break Ok(value),
+                    }
+                };
+                self.pop_frame();
+                result
             }
-        };
-        self.pop_frame();
-        result
+            Proc::Native(f) => f(receiver, args, self),
+        }
     }
 
     fn next(&mut self) -> ThreadResult {
         let code = match self.frames.top() {
-            Some(frame) => match frame.proc.code.get(self.pc) {
+            Some(frame) => match frame.proc.sapphire().unwrap().code.get(self.pc) {
                 Some(code) => *code,
                 None => return ThreadResult::Err(ThreadError::UnexpectedEnd.into()),
             },
@@ -319,7 +342,7 @@ impl Thread {
             Op::BEGIN_RESCUE => self.op_begin_rescue(),
             Op::RESCUE_MATCH => self.op_rescue_match(),
             Op::RESCUE_BIND => self.op_rescue_bind(),
-            Op::CONTINUE_RESCUE => self.op_continue_rescue(),
+            Op::CONTINUE_UNWIND => self.op_continue_unwind(),
             Op::END_RESCUE => self.op_end_rescue(),
             Op::DEFINED_CONST => self.op_defined_const(),
             Op::DEFINED_GLOBAL => self.op_defined_global(),
@@ -337,7 +360,23 @@ impl Thread {
         match res {
             Ok(Some(value)) => ThreadResult::Ready(value),
             Ok(None) => ThreadResult::NotReady,
-            Err(err) => ThreadResult::Err(err),
+            Err(SendError::Exception(exception)) => {
+                let top_frame = self.frames.buf.len() - 1;
+                if self
+                    .rescues
+                    .top()
+                    .map_or(false, |(frame, _)| *frame == top_frame)
+                {
+                    // this proc has registered a rescue
+                    self.exception = Some(exception);
+                    self.pc = self.rescues.pop().unwrap().1;
+                    ThreadResult::NotReady
+                } else {
+                    // unwind
+                    ThreadResult::Err(SendError::Exception(exception))
+                }
+            }
+            Err(SendError::Thread(err)) => ThreadResult::Err(SendError::Thread(err)),
         }
     }
 
@@ -474,12 +513,13 @@ impl Thread {
         let out = self.read_addr()?;
         let frame = self.frames.top_mut().unwrap();
         let register = frame.detach_register();
-        let mut parent_registers = frame.proc.parent_registers.clone();
+        let mut parent_registers = frame.proc.sapphire().unwrap().parent_registers.clone();
         parent_registers.push(register);
         match self.read_static()? {
             CStatic::Proc(value) => {
                 let proc = value.clone_with_parents(parent_registers);
-                self.frames.top_mut().unwrap().register_mut()[out] = Value::Proc(Arc::new(proc));
+                self.frames.top_mut().unwrap().register_mut()[out] =
+                    Value::Proc(Proc::Sapphire(Arc::new(proc)));
                 Ok(None)
             }
             _ => Err(ThreadError::InvalidStatic.into()),
@@ -629,20 +669,48 @@ impl Thread {
     #[inline]
     fn op_begin_rescue(&mut self) -> OpResult {
         let rescue_addr = self.read_addr()?;
-        self.rescues.push(rescue_addr)?;
+        self.rescues
+            .push((self.frames.buf.len() - 1, rescue_addr))?;
         Ok(None)
     }
     #[inline]
     fn op_rescue_match(&mut self) -> OpResult {
-        unimplemented!()
+        let class = self.read_addr()?;
+        let label = self.read_addr()?;
+        if let Some(exception) = &self.exception {
+            let mut exception = exception.clone();
+            let class_obj = self.frames.top_mut().unwrap().register_mut()[class].clone();
+            let mut args = iter::once(class_obj);
+            let is_match =
+                match exception.send(Symbol::IS_A, Arguments::new(&mut args, None), self)? {
+                    Value::Bool(true) => true,
+                    _ => false,
+                };
+            if is_match {
+                self.pc = label;
+            }
+            Ok(None)
+        } else {
+            Err(SendError::Thread(ThreadError::InvalidRescueOp))
+        }
     }
     #[inline]
     fn op_rescue_bind(&mut self) -> OpResult {
-        unimplemented!()
+        let out = self.read_addr()?;
+        if let Some(_) = &self.exception {
+            self.frames.top_mut().unwrap().register_mut()[out] = self.exception.take().unwrap();
+            Ok(None)
+        } else {
+            Err(SendError::Thread(ThreadError::InvalidRescueOp))
+        }
     }
     #[inline]
-    fn op_continue_rescue(&mut self) -> OpResult {
-        unimplemented!()
+    fn op_continue_unwind(&mut self) -> OpResult {
+        if self.exception.is_some() {
+            Err(SendError::Exception(self.exception.take().unwrap()))
+        } else {
+            Err(SendError::Thread(ThreadError::InvalidRescueOp))
+        }
     }
     #[inline]
     fn op_end_rescue(&mut self) -> OpResult {
@@ -709,7 +777,7 @@ impl Thread {
             }
             module
         };
-        self.call(module, proc, Arguments::empty())?;
+        self.call(module, Proc::Sapphire(proc), Arguments::empty())?;
         Ok(None)
     }
     #[inline]
@@ -752,7 +820,7 @@ impl Thread {
             }
             module
         };
-        self.call(module, proc, Arguments::empty())?;
+        self.call(module, Proc::Sapphire(proc), Arguments::empty())?;
         Ok(None)
     }
     #[inline]
@@ -767,7 +835,7 @@ impl Thread {
             Symbol::DEFINE_METHOD,
             Arguments {
                 args: &mut iter::once(Value::Symbol(name)),
-                block: Some(Value::Proc(proc)),
+                block: Some(Value::Proc(Proc::Sapphire(proc))),
             },
             self,
         );

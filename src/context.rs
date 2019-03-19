@@ -2,11 +2,13 @@
 
 use crate::exception::Exceptions;
 use crate::heap::Ref;
+use crate::kernel::init as init_kernel;
 use crate::object::{init_root, Object, RbObject};
 use crate::symbol::{Symbol, Symbols};
 use crate::value::Value;
 use fnv::FnvHashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::Arc;
 
 /// An execution context: contains globals, a symbol table, and a root object.
 #[derive(Debug)]
@@ -30,12 +32,12 @@ pub struct Context {
 
 impl Context {
     /// Creates a new context.
-    pub fn new() -> Context {
+    pub fn new() -> Arc<Context> {
         let mut symbols = Symbols::new();
         let (object_class, class_class, module_class) = init_root(&mut symbols);
         let exceptions = Exceptions::new(&mut symbols, object_class.clone(), class_class.clone());
 
-        Context {
+        let context = Arc::new(Context {
             symbols: RwLock::new(symbols),
             globals: Ref::new_generic(FnvHashMap::default()),
             root: RbObject::new(object_class.clone()),
@@ -50,7 +52,11 @@ impl Context {
             class_class: class_class,
             module_class: module_class,
             exceptions,
-        }
+        });
+
+        init_kernel(&context);
+
+        context
     }
 
     /// Returns the symbol table.

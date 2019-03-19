@@ -320,7 +320,7 @@ pub enum IROp<T: SymbolTable> {
     /// Binds the exception to a variable.
     RescueBind(Var),
     /// Continues unwinding the stack.
-    ContinueRescue,
+    ContinueUnwind,
     /// End of a rescuable section.
     EndRescue,
     /// `defined?` for a constant variable.
@@ -399,7 +399,7 @@ impl<T: SymbolTable> IROp<T> {
                 cb(var, false);
                 cb(var2, false);
             }
-            Label(_) | Jump(_) | BeginRescue(_) | ContinueRescue | EndRescue | DefMethod(_, _) => {
+            Label(_) | Jump(_) | BeginRescue(_) | ContinueUnwind | EndRescue | DefMethod(_, _) => {
                 ()
             }
             DefClass(var, _, var2, _) => {
@@ -432,7 +432,6 @@ impl<T: SymbolTable> IROp<T> {
             | LoadFloat(out, _)
             | LoadBlock(out, _)
             | LoadParent(out, _, _)
-            | RescueBind(out)
             | DefinedConst(out, _)
             | DefinedGlobal(out, _)
             | DefinedClassVar(out, _)
@@ -458,7 +457,8 @@ impl<T: SymbolTable> IROp<T> {
             | AssignParent(_, _, _)
             | BeginRescue(_)
             | RescueMatch(_, _)
-            | ContinueRescue
+            | RescueBind(_)
+            | ContinueUnwind
             | EndRescue
             | DefModule(_, _, _)
             | DefClass(_, _, _, _)
@@ -517,7 +517,7 @@ impl<T: SymbolTable> IROp<T> {
             IROp::BeginRescue(label) => format!("begin rescue (rescue -> {})", label),
             IROp::RescueMatch(class, label) => format!("rescue instanceof {} -> {}", class, label),
             IROp::RescueBind(var) => format!("rescue => {};", var),
-            IROp::ContinueRescue => format!("continue rescue;"),
+            IROp::ContinueUnwind => format!("continue unwind;"),
             IROp::EndRescue => format!("end rescue;"),
             IROp::DefinedConst(var, name) => format!("{} = defined? {};", var, sym!(name)),
             IROp::DefinedGlobal(var, name) => format!("{} = defined? ${};", var, sym!(name)),
@@ -2013,12 +2013,14 @@ impl<T: SymbolTable> IRProc<T> {
                     },
                     _ => unimplemented!("assign exception to non-variable"),
                 }
+            } else {
+                items.push(IROp::RescueBind(Var::Void));
             }
             Self::expand_statements(&rescue.body, out, scope, items)?;
             items.push(IROp::Jump(ensure_label));
             items.push(IROp::Label(end_label));
         }
-        items.push(IROp::ContinueRescue);
+        items.push(IROp::ContinueUnwind);
         items.push(IROp::Label(else_label));
         if let Some(else_) = &body.else_ {
             Self::expand_statements(&else_, out, scope, items)?;

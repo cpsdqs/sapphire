@@ -7,6 +7,7 @@ pub extern crate sapphire_compiler_macro as compiler_macro;
 pub mod context;
 pub mod exception;
 pub mod heap;
+pub mod kernel;
 pub mod numeric;
 pub mod object;
 pub mod proc;
@@ -25,15 +26,16 @@ pub mod value;
 /// # use sapphire::thread::Thread;
 /// # use sapphire::object::Arguments;
 /// # use sapphire::value::Value;
+/// # use sapphire::proc::Proc;
 /// # use std::sync::Arc;
 /// // Ruby source code that will be compiled to byte code at compile-time
 /// let compiled = sapphire::compile!("def one_plus_one; 1 + 1; end");
 ///
 /// // Create an execution context
-/// let context = Arc::new(Context::new());
+/// let context = Context::new();
 ///
 /// // instantiate `compiled` as a Proc in the new context
-/// let compiled_in_context = Arc::new(compiled.new(&mut *context.symbols_mut()));
+/// let compiled_in_context = Proc::Sapphire(Arc::new(compiled.new(&mut *context.symbols_mut())));
 ///
 /// let mut thread = Thread::new(Arc::clone(&context));
 ///

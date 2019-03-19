@@ -10,7 +10,6 @@ use crate::value::Value;
 use fnv::FnvHashMap;
 use std::any::Any;
 use std::mem;
-use std::sync::Arc;
 
 /// An exception.
 #[derive(Debug, Clone)]
@@ -49,7 +48,7 @@ impl Exception {
 /// A backtrace item.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraceItem {
-    pub proc: Arc<Proc>,
+    pub proc: Proc,
     pub pc: usize,
 }
 
@@ -98,6 +97,7 @@ pub struct Exceptions {
     pub zero_division_error: Ref<Object>,
     pub name_error: Ref<Object>,
     pub no_method_error: Ref<Object>,
+    pub argument_error: Ref<Object>,
 }
 
 impl Exceptions {
@@ -106,6 +106,7 @@ impl Exceptions {
         object_class: Ref<Object>,
         class_class: Ref<Object>,
     ) -> Exceptions {
+        // TODO: use macros or ruby for this
         let exception = RbClass::new_unchecked(
             symbols.symbol("Exception"),
             object_class.clone(),
@@ -129,6 +130,11 @@ impl Exceptions {
         let no_method_error = RbClass::new_unchecked(
             symbols.symbol("NoMethodError"),
             name_error.clone(),
+            class_class.clone(),
+        );
+        let argument_error = RbClass::new_unchecked(
+            symbols.symbol("ArgumentError"),
+            standard_error.clone(),
             class_class,
         );
 
@@ -158,6 +164,12 @@ impl Exceptions {
                     Value::Ref(no_method_error.clone()),
                 )
                 .unwrap();
+            object_class
+                .set(
+                    symbols.symbol("ArgumentError"),
+                    Value::Ref(argument_error.clone()),
+                )
+                .unwrap();
         }
 
         Exceptions {
@@ -166,6 +178,7 @@ impl Exceptions {
             zero_division_error,
             name_error,
             no_method_error,
+            argument_error,
         }
     }
 }
