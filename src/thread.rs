@@ -831,17 +831,14 @@ impl Thread {
             _ => return Err(ThreadError::InvalidStatic.into()),
         };
         let top_module = self.modules.top_mut().unwrap().clone();
-        let res = top_module.get().send(
+        top_module.get().send(
             Symbol::DEFINE_METHOD,
             Arguments {
                 args: &mut iter::once(Value::Symbol(name)),
                 block: Some(Value::Proc(Proc::Sapphire(proc))),
             },
             self,
-        );
-        if let Err(err) = res {
-            unimplemented!("exception for {:?}", err)
-        }
+        )?;
         Ok(None)
     }
     #[inline]
@@ -858,7 +855,23 @@ impl Thread {
     }
     #[inline]
     fn op_def_singleton_method(&mut self) -> OpResult {
-        unimplemented!()
+        let obj = self.read_addr()?;
+        let name = self.read_symbol()?;
+        let proc = match self.read_static()? {
+            CStatic::Proc(proc) => Proc::Sapphire(Arc::clone(proc)),
+            _ => return Err(ThreadError::InvalidStatic.into()),
+        };
+        let mut obj = self.frames.top_mut().unwrap().register_mut()[obj].clone();
+        let mut singleton_class = obj.send(Symbol::SINGLETON_CLASS, Arguments::empty(), self)?;
+        singleton_class.send(
+            Symbol::DEFINE_METHOD,
+            Arguments {
+                args: &mut iter::once(Value::Symbol(name)),
+                block: Some(Value::Proc(proc)),
+            },
+            self,
+        )?;
+        Ok(None)
     }
     #[inline]
     fn op_param_fallback(&mut self) -> OpResult {

@@ -85,12 +85,14 @@ impl<'input> Iterator for Cursor<'input> {
 #[derive(Debug)]
 pub struct ParseState<'input> {
     cache: HashMap<(usize, &'static str), ParseError<'input>>,
+    pop_last_tail_rule: Vec<()>,
 }
 
 impl<'input> ParseState<'input> {
     pub fn new() -> RefCell<ParseState<'input>> {
         RefCell::new(ParseState {
             cache: HashMap::new(),
+            pop_last_tail_rule: Vec::new(),
         })
     }
 
@@ -413,14 +415,21 @@ macro_rules! tail_rules {
     ) => {{
         match $submac!($i, $($args)*) {
             Ok((mut i, mut $accum)) => {
+                let pop_last_tail_rule = !i.state.borrow().pop_last_tail_rule.is_empty();
+                let mut prev_accum = None;
                 loop {
                     let j = i.clone();
                     match alt!(j, $(tail_rule!($($targs)*),)+ err: $err) {
                         Ok((j, r)) => {
+                            if pop_last_tail_rule {
+                                prev_accum = Some((i, $accum));
+                            }
                             i = j;
                             $accum = r;
                         }
-                        Err(_) => {
+                        Err(_) => if pop_last_tail_rule {
+                            break Ok(prev_accum.unwrap_or((i, $accum)));
+                        } else {
                             break Ok((i, $accum));
                         }
                     }
@@ -429,6 +438,18 @@ macro_rules! tail_rules {
             Err(e) => Err(e),
         }
     }}
+}
+
+// kinda hacky
+// will probably cause crosstalk
+// TODO: prevent crosstalk
+macro_rules! pop_last_tail_rule {
+    ($i:expr, $f:path) => {{
+        $i.state.borrow_mut().pop_last_tail_rule.push(());
+        let res = call!($i, $f);
+        $i.state.borrow_mut().pop_last_tail_rule.pop();
+        res
+    }};
 }
 
 macro_rules! call_macro {
@@ -770,6 +791,7 @@ sapphire_parser_gen::parser! {
         class_definition,
         module_definition,
         singleton_class_definition,
+        singleton_method_definition,
         if_expression,
         while_expression,
         for_expression,
@@ -1093,6 +1115,22 @@ sapphire_parser_gen::parser! {
     method_parameters: Parameters = {
         token!(PLParen) wss p: opt!(parameter_list) wss token!(PRParen) => (p.unwrap_or_default()),
         p: opt!(parameter_list) ws separator => (p.unwrap_or_default()),
+    }
+
+    singleton_method_definition: Expression = {
+        token!(Kdef) wss e: pop_last_tail_rule!(expression)
+            ws token!(PDot, PDblColon,)
+            wss n: method_name
+            ws p: method_parameters
+            wss b: body_statement
+            wss token!(Kend) => {
+            Expression::SingletonMethod {
+                expr: Box::new(e),
+                name: n,
+                params: p,
+                body: b,
+            }
+        }
     }
 
     class_definition: Expression = {
