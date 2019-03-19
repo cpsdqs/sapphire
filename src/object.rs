@@ -147,7 +147,7 @@ impl RbModule {
                         break;
                     }
                     Ok(_) => continue,
-                    Err(err) => unimplemented!("handle {:?}", err),
+                    Err(_) => (),
                 }
             }
             method
@@ -274,7 +274,7 @@ impl RbClass {
                         break;
                     }
                     Ok(_) => continue,
-                    Err(err) => unimplemented!("handle {:?}", err),
+                    Err(_) => (),
                 }
             }
             if let Some(method) = method {
@@ -288,8 +288,8 @@ impl RbClass {
                 ) {
                     Ok(Value::Proc(m)) => Some(m),
                     Ok(Value::Nil) => None,
-                    Ok(_) => unimplemented!("handle invalid return value"),
-                    Err(err) => unimplemented!("handle {:?}", err),
+                    Ok(_) => None,
+                    Err(_) => None,
                 }
             } else {
                 None
@@ -344,7 +344,13 @@ impl Object for RbClass {
                 _ => unimplemented!("raise ArgumentError"),
             },
             Symbol::SUPERCLASS => Ok(Value::Ref(self.superclass.clone())),
-            _ => unimplemented!("send to class"),
+            name => send(
+                Value::Ref(self.self_ref.upgrade().unwrap()),
+                self.class.clone(),
+                name,
+                args,
+                thread,
+            ),
         }
     }
     fn inspect(&self, context: &Context) -> String {
@@ -406,7 +412,8 @@ pub fn send(
                 Err(SendError::Exception(Value::Ref(exception)))
             }
         }
-        res => unimplemented!("handle unexpected class.method response: {:?}", res),
+        Ok(_) => unimplemented!("raise exception"),
+        Err(err) => Err(err),
     }
 }
 

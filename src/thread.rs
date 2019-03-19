@@ -396,10 +396,7 @@ impl Thread {
         let out = self.read_addr()?;
         let name = self.read_symbol()?;
         let mut self_obj = self.frames.top_mut().unwrap().register_mut()[SELF].clone();
-        let self_class = match self_obj.send(Symbol::CLASS, Arguments::empty(), self) {
-            Ok(class) => class,
-            Err(_err) => unimplemented!("exception"),
-        };
+        let self_class = self_obj.send(Symbol::CLASS, Arguments::empty(), self)?;
         match self_class.get(name) {
             Some(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
             None => self.frames.top_mut().unwrap().register_mut()[out] = Value::Nil,
@@ -523,10 +520,8 @@ impl Thread {
         let method = self.read_symbol()?;
         let args = self.arg_builder.take();
         let (mut arg_iter, block) = args.as_args();
-        match recv.send(method, Arguments::new(&mut arg_iter, block), self) {
-            Ok(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
-            Err(err) => return Err(err),
-        }
+        let value = recv.send(method, Arguments::new(&mut arg_iter, block), self)?;
+        self.frames.top_mut().unwrap().register_mut()[out] = value;
         Ok(None)
     }
     #[inline]
@@ -539,10 +534,8 @@ impl Thread {
             let register = self.frames.top_mut().unwrap().register_mut();
             (register[recv].clone(), iter::once(register[arg].clone()))
         };
-        match recv.send(method, Arguments::new(&mut arg_iter, None), self) {
-            Ok(value) => self.frames.top_mut().unwrap().register_mut()[out] = value,
-            Err(_err) => unimplemented!("exception for {:?}", _err),
-        }
+        let value = recv.send(method, Arguments::new(&mut arg_iter, None), self)?;
+        self.frames.top_mut().unwrap().register_mut()[out] = value;
         Ok(None)
     }
     #[inline]
@@ -608,11 +601,26 @@ impl Thread {
     }
     #[inline]
     fn op_assign_class_var(&mut self) -> OpResult {
-        unimplemented!()
+        let name = self.read_symbol()?;
+        let var = self.read_addr()?;
+        let mut self_obj = self.frames.top_mut().unwrap().register_mut()[SELF].clone();
+        let mut class = self_obj.send(Symbol::CLASS, Arguments::empty(), self)?;
+        let value = self.frames.top_mut().unwrap().register_mut()[var].clone();
+        if let Err(()) = class.set(name, value) {
+            unimplemented!("exception")
+        }
+        Ok(None)
     }
     #[inline]
     fn op_assign_ivar(&mut self) -> OpResult {
-        unimplemented!()
+        let name = self.read_symbol()?;
+        let var = self.read_addr()?;
+        let mut register = self.frames.top_mut().unwrap().register_mut();
+        let value = register[var].clone();
+        if let Err(()) = register[SELF].set(name, value) {
+            unimplemented!("exception")
+        }
+        Ok(None)
     }
     #[inline]
     fn op_assign_parent(&mut self) -> OpResult {
@@ -647,15 +655,28 @@ impl Thread {
     }
     #[inline]
     fn op_defined_global(&mut self) -> OpResult {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let name = self.read_symbol()?;
+        let mut register = self.frames.top_mut().unwrap().register_mut();
+        register[out] = Value::Bool(self.context.globals().get().contains_key(&name));
+        Ok(None)
     }
     #[inline]
     fn op_defined_class_var(&mut self) -> OpResult {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let name = self.read_symbol()?;
+        let mut self_obj = self.frames.top_mut().unwrap().register_mut()[SELF].clone();
+        let class = self_obj.send(Symbol::CLASS, Arguments::empty(), self)?;
+        self.frames.top_mut().unwrap().register_mut()[out] = Value::Bool(class.get(name).is_some());
+        Ok(None)
     }
     #[inline]
     fn op_defined_ivar(&mut self) -> OpResult {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let name = self.read_symbol()?;
+        let mut register = self.frames.top_mut().unwrap().register_mut();
+        register[out] = Value::Bool(register[SELF].get(name).is_some());
+        Ok(None)
     }
     #[inline]
     fn op_def_module(&mut self) -> OpResult {
@@ -665,19 +686,29 @@ impl Thread {
             CStatic::Proc(proc) => Arc::clone(proc),
             _ => return Err(ThreadError::InvalidStatic.into()),
         };
-        let module = Value::Ref(RbModule::new(name, &self.context));
-        let res = if parent == VOID {
-            self.modules
-                .top_mut()
-                .unwrap()
-                .get()
-                .set(name, module.clone())
+        let module = if parent == VOID {
+            self.modules.top_mut().unwrap().get().get(name)
         } else {
-            self.frames.top_mut().unwrap().register_mut()[parent].set(name, module.clone())
+            self.frames.top_mut().unwrap().register_mut()[parent].get(name)
         };
-        if let Err(()) = res {
-            unimplemented!("exception")
-        }
+        let module = if let Some(module) = module {
+            module
+        } else {
+            let module = Value::Ref(RbModule::new(name, &self.context));
+            let res = if parent == VOID {
+                self.modules
+                    .top_mut()
+                    .unwrap()
+                    .get()
+                    .set(name, module.clone())
+            } else {
+                self.frames.top_mut().unwrap().register_mut()[parent].set(name, module.clone())
+            };
+            if let Err(()) = res {
+                unimplemented!("exception")
+            }
+            module
+        };
         self.call(module, proc, Arguments::empty())?;
         Ok(None)
     }
@@ -698,19 +729,29 @@ impl Thread {
             CStatic::Proc(proc) => Arc::clone(proc),
             _ => return Err(ThreadError::InvalidStatic.into()),
         };
-        let module = Value::Ref(RbClass::new(name, superclass, &self.context));
-        let res = if parent == VOID {
-            self.modules
-                .top_mut()
-                .unwrap()
-                .get()
-                .set(name, module.clone())
+        let module = if parent == VOID {
+            self.modules.top_mut().unwrap().get().get(name)
         } else {
-            self.frames.top_mut().unwrap().register_mut()[parent].set(name, module.clone())
+            self.frames.top_mut().unwrap().register_mut()[parent].get(name)
         };
-        if let Err(()) = res {
-            unimplemented!("exception")
-        }
+        let module = if let Some(module) = module {
+            module
+        } else {
+            let module = Value::Ref(RbClass::new(name, superclass, &self.context));
+            let res = if parent == VOID {
+                self.modules
+                    .top_mut()
+                    .unwrap()
+                    .get()
+                    .set(name, module.clone())
+            } else {
+                self.frames.top_mut().unwrap().register_mut()[parent].set(name, module.clone())
+            };
+            if let Err(()) = res {
+                unimplemented!("exception")
+            }
+            module
+        };
         self.call(module, proc, Arguments::empty())?;
         Ok(None)
     }
