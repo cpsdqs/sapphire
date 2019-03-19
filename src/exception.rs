@@ -2,7 +2,7 @@
 
 use crate::context::Context;
 use crate::heap::{Ref, Weak};
-use crate::object::{send, Arguments, Object, RbClass, SendError};
+use crate::object::{send, Arguments, ClassName, Object, RbClass, SendError};
 use crate::proc::Proc;
 use crate::symbol::{Symbol, Symbols};
 use crate::thread::Thread;
@@ -108,32 +108,32 @@ impl Exceptions {
     ) -> Exceptions {
         // TODO: use macros or ruby for this
         let exception = RbClass::new_unchecked(
-            symbols.symbol("Exception"),
+            ClassName::Name(symbols.symbol("Exception")),
             object_class.clone(),
             class_class.clone(),
         );
         let standard_error = RbClass::new_unchecked(
-            symbols.symbol("StandardError"),
+            ClassName::Name(symbols.symbol("StandardError")),
             exception.clone(),
             class_class.clone(),
         );
         let zero_division_error = RbClass::new_unchecked(
-            symbols.symbol("ZeroDivisionError"),
+            ClassName::Name(symbols.symbol("ZeroDivisionError")),
             standard_error.clone(),
             class_class.clone(),
         );
         let name_error = RbClass::new_unchecked(
-            symbols.symbol("NameError"),
+            ClassName::Name(symbols.symbol("NameError")),
             standard_error.clone(),
             class_class.clone(),
         );
         let no_method_error = RbClass::new_unchecked(
-            symbols.symbol("NoMethodError"),
+            ClassName::Name(symbols.symbol("NoMethodError")),
             name_error.clone(),
             class_class.clone(),
         );
         let argument_error = RbClass::new_unchecked(
-            symbols.symbol("ArgumentError"),
+            ClassName::Name(symbols.symbol("ArgumentError")),
             standard_error.clone(),
             class_class,
         );

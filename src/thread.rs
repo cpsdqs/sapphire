@@ -846,7 +846,15 @@ impl Thread {
     }
     #[inline]
     fn op_def_singleton_class(&mut self) -> OpResult {
-        unimplemented!()
+        let obj = self.read_addr()?;
+        let proc = match self.read_static()? {
+            CStatic::Proc(proc) => Proc::Sapphire(Arc::clone(proc)),
+            _ => return Err(ThreadError::InvalidStatic.into()),
+        };
+        let mut obj = self.frames.top_mut().unwrap().register_mut()[obj].clone();
+        let singleton_class = obj.send(Symbol::SINGLETON_CLASS, Arguments::empty(), self)?;
+        self.call(singleton_class, proc, Arguments::empty())?;
+        Ok(None)
     }
     #[inline]
     fn op_def_singleton_method(&mut self) -> OpResult {

@@ -769,6 +769,7 @@ sapphire_parser_gen::parser! {
         method_definition,
         class_definition,
         module_definition,
+        singleton_class_definition,
         if_expression,
         while_expression,
         for_expression,
@@ -1127,6 +1128,18 @@ sapphire_parser_gen::parser! {
             wss token!(Kend) => {
             Expression::Module {
                 path: p,
+                body: b,
+            }
+        }
+    }
+
+    singleton_class_definition: Expression = {
+        token!(Kclass) ws token!(OShl) wss e: expression
+            ws separator
+            wss b: body_statement
+            wss token!(Kend) => {
+            Expression::SingletonClass {
+                expr: Box::new(e),
                 body: b,
             }
         }

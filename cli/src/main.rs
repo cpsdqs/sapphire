@@ -48,7 +48,7 @@ fn main() {
                     match &*line {
                         ".ast" => {
                             ast = !ast;
-                            print_enabled_disabled(ir, "AST");
+                            print_enabled_disabled(ast, "AST");
                         }
                         ".ir" => {
                             ir = !ir;

@@ -1,6 +1,7 @@
 //! Numeric type implementations.
 
 use crate::context::Context;
+use crate::exception::Exception;
 use crate::object::{send, Arguments, Object, SendError};
 use crate::symbol::Symbol;
 use crate::thread::Thread;
@@ -47,7 +48,17 @@ impl Object for i64 {
                         Symbol::ADD => Ok(Value::Fixnum(*self + rhs)),
                         Symbol::SUB => Ok(Value::Fixnum(*self - rhs)),
                         Symbol::MUL => Ok(Value::Fixnum(*self * rhs)),
-                        Symbol::DIV => Ok(Value::Fixnum(*self / rhs)),
+                        Symbol::DIV => {
+                            if rhs == 0 {
+                                Err(SendError::Exception(Value::Ref(Exception::new(
+                                    "attempt to divide by zero".into(),
+                                    thread.trace(),
+                                    thread.context().exceptions().zero_division_error.clone(),
+                                ))))
+                            } else {
+                                Ok(Value::Fixnum(*self / rhs))
+                            }
+                        }
                         Symbol::REM => Ok(Value::Fixnum(*self % rhs)),
                         Symbol::LEQ => Ok(Value::Bool(*self <= rhs)),
                         Symbol::GEQ => Ok(Value::Bool(*self >= rhs)),

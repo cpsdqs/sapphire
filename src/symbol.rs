@@ -109,6 +109,7 @@ def_common_symbols! {
     INCLUDE = "include",
     RAISE = "raise",
     BLOCK_GIVEN = "block_given?",
+    SINGLETON_CLASS = "singleton_class",
 }
 
 /// A symbol table.

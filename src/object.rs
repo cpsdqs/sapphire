@@ -259,9 +259,14 @@ impl Object for RbModule {
     }
 }
 
+pub(crate) enum ClassName {
+    Name(Symbol),
+    Singleton(Weak<Object>),
+}
+
 /// A generic class.
 pub struct RbClass {
-    name: Symbol,
+    name: ClassName,
     class_vars: FnvHashMap<Symbol, Value>,
     modules: SmallVec<[Ref<Object>; 16]>,
     methods: FnvHashMap<Symbol, Proc>,
@@ -273,11 +278,23 @@ pub struct RbClass {
 
 impl RbClass {
     pub fn new(name: Symbol, superclass: Ref<Object>, context: &Context) -> Ref<Object> {
-        Self::new_unchecked(name, superclass, context.class_class().clone())
+        Self::new_unchecked(
+            ClassName::Name(name),
+            superclass,
+            context.class_class().clone(),
+        )
+    }
+
+    fn new_singleton(receiver: Weak<Object>, class: Ref<Object>, context: &Context) -> Ref<Object> {
+        Self::new_unchecked(
+            ClassName::Singleton(receiver),
+            class,
+            context.class_class().clone(),
+        )
     }
 
     pub(crate) fn new_unchecked(
-        name: Symbol,
+        name: ClassName,
         superclass: Ref<Object>,
         class: Ref<Object>,
     ) -> Ref<Object> {
@@ -412,10 +429,16 @@ impl Object for RbClass {
         }
     }
     fn inspect(&self, context: &Context) -> String {
-        format!(
-            "<Class:{}>",
-            context.symbols().symbol_name(self.name).unwrap_or("?")
-        )
+        match &self.name {
+            ClassName::Name(name) => format!(
+                "<Class:{}>",
+                context.symbols().symbol_name(*name).unwrap_or("?")
+            ),
+            ClassName::Singleton(owner) => match owner.upgrade() {
+                Some(obj) => format!("<SingletonClass:{}>", obj.get().inspect(context)),
+                None => format!("<SingletonClass:[dropped]>"),
+            },
+        }
     }
     fn as_any(&self) -> &Any {
         self
@@ -479,6 +502,7 @@ pub fn send(
 pub struct RbObject {
     ivars: FnvHashMap<Symbol, Value>,
     class: Ref<Object>,
+    singleton_class: Option<Ref<Object>>,
     self_ref: Weak<Object>,
 }
 
@@ -487,6 +511,7 @@ impl RbObject {
         let this = Ref::new(RbObject {
             ivars: FnvHashMap::default(),
             class,
+            singleton_class: None,
             self_ref: unsafe { mem::uninitialized() },
         });
         let weak = this.downgrade();
@@ -497,6 +522,18 @@ impl RbObject {
             weak,
         ));
         this
+    }
+
+    fn ensure_singleton_class(&mut self, context: &Context) {
+        if self.singleton_class.is_some() {
+            return;
+        }
+
+        self.singleton_class = Some(RbClass::new_singleton(
+            self.self_ref.clone(),
+            self.class.clone(),
+            context,
+        ));
     }
 }
 
@@ -514,13 +551,20 @@ impl Object for RbObject {
         args: Arguments,
         thread: &mut Thread,
     ) -> Result<Value, SendError> {
-        send(
-            Value::Ref(self.self_ref.upgrade().unwrap()),
-            self.class.clone(),
-            name,
-            args,
-            thread,
-        )
+        match name {
+            Symbol::CLASS => Ok(Value::Ref(self.class.clone())),
+            Symbol::SINGLETON_CLASS => {
+                self.ensure_singleton_class(thread.context());
+                Ok(Value::Ref(self.singleton_class.as_ref().unwrap().clone()))
+            }
+            name => send(
+                Value::Ref(self.self_ref.upgrade().unwrap()),
+                self.singleton_class.as_ref().unwrap_or(&self.class).clone(),
+                name,
+                args,
+                thread,
+            ),
+        }
     }
     fn inspect(&self, context: &Context) -> String {
         let class = self.class.get().inspect(context);
@@ -537,7 +581,7 @@ impl Object for RbObject {
 /// Creates the object class, class class, and module class (return value is in that order).
 pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object>) {
     let object_class: Ref<Object> = Ref::new(RbClass {
-        name: symbols.symbol("Object"),
+        name: ClassName::Name(symbols.symbol("Object")),
         class_vars: FnvHashMap::default(),
         modules: SmallVec::new(),
         methods: FnvHashMap::default(),
@@ -547,7 +591,7 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         self_ref: unsafe { mem::uninitialized() },
     });
     let module_class: Ref<Object> = Ref::new(RbClass {
-        name: symbols.symbol("Module"),
+        name: ClassName::Name(symbols.symbol("Module")),
         class_vars: FnvHashMap::default(),
         modules: SmallVec::new(),
         methods: FnvHashMap::default(),
@@ -557,7 +601,7 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         self_ref: unsafe { mem::uninitialized() },
     });
     let class_class: Ref<Object> = Ref::new(RbClass {
-        name: symbols.symbol("Class"),
+        name: ClassName::Name(symbols.symbol("Class")),
         class_vars: FnvHashMap::default(),
         modules: SmallVec::new(),
         methods: FnvHashMap::default(),
