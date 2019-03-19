@@ -252,100 +252,100 @@ impl fmt::Display for IRError {
 #[derive(Debug)]
 pub enum IROp<T: SymbolTable> {
     /// Loads the root (::) into the local variable.
-    LoadRoot(Var),
+    LoadRoot(Span, Var),
     /// Loads a boolean value into the local variable.
-    LoadBool(Var, bool),
+    LoadBool(Span, Var, bool),
     /// Loads a reference to a global variable into the local variable.
-    LoadGlobal(Var, T::Symbol),
+    LoadGlobal(Span, Var, T::Symbol),
     /// Loads a reference to a constant into the local variable.
-    LoadConst(Var, Var, T::Symbol),
+    LoadConst(Span, Var, Var, T::Symbol),
     /// Loads a reference to a class variable into the local variable.
-    LoadClassVar(Var, T::Symbol),
+    LoadClassVar(Span, Var, T::Symbol),
     /// Loads a reference to an instance variable into the local variable.
-    LoadIVar(Var, T::Symbol),
+    LoadIVar(Span, Var, T::Symbol),
     /// Loads a literal string into the local variable.
-    LoadString(Var, String),
+    LoadString(Span, Var, String),
     /// Appends the second string to the first.
-    AppendString(Var, Var),
+    AppendString(Span, Var, Var),
     /// Loads a literal T::symbol into the local variable.
-    LoadSymbol(Var, T::Symbol),
+    LoadSymbol(Span, Var, T::Symbol),
     /// Loads an i64 number into the local variable.
-    LoadI64(Var, i64),
+    LoadI64(Span, Var, i64),
     /// Loads a float number into the local variable.
-    LoadFloat(Var, f64),
+    LoadFloat(Span, Var, f64),
     /// Loads a block into the local variable.
-    LoadBlock(Var, IRProc<T>),
+    LoadBlock(Span, Var, IRProc<T>),
     /// Loads a variable from a parent proc into the local variable.
-    LoadParent(Var, usize, usize),
+    LoadParent(Span, Var, usize, usize),
     /// Pushes a positional argument.
-    Arg(Var),
+    Arg(Span, Var),
     /// Pushes an associative argument.
-    ArgAssoc(Var, Var),
+    ArgAssoc(Span, Var, Var),
     /// Pushes a block argument.
-    ArgBlock(Var),
+    ArgBlock(Span, Var),
     /// Calls a method and loads the result into a local variable.
-    Call(Var, Var, T::Symbol),
+    Call(Span, Var, Var, T::Symbol),
     /// Calls a method with one argument and loads the result into a local variable.
-    CallOne(Var, Var, T::Symbol, Var),
+    CallOne(Span, Var, Var, T::Symbol, Var),
     /// Calls super and loads the result into a local variable.
-    Super(Var),
+    Super(Span, Var),
     /// Performs the not operation on the second argument and loads it into the first argument.
-    Not(Var, Var),
+    Not(Span, Var, Var),
     /// Label marker.
-    Label(Label),
+    Label(Span, Label),
     /// Jumps to a label.
-    Jump(Label),
+    Jump(Span, Label),
     /// Jumps to a label if the variable is truthy.
-    JumpIf(Var, Label),
+    JumpIf(Span, Var, Label),
     /// Jumps to a label if the variable is falsy.
-    JumpIfNot(Var, Label),
+    JumpIfNot(Span, Var, Label),
     /// Returns with a value.
-    Return(Var),
+    Return(Span, Var),
     /// Assigns the value of the second to the first.
-    Assign(Var, Var),
+    Assign(Span, Var, Var),
     /// Assigns the value of the second to the first.
-    AssignGlobal(T::Symbol, Var),
+    AssignGlobal(Span, T::Symbol, Var),
     /// Assigns the value of the second to the first.
-    AssignConst(T::Symbol, Var),
+    AssignConst(Span, T::Symbol, Var),
     /// Assigns the value of the second to the first.
-    AssignClassVar(T::Symbol, Var),
+    AssignClassVar(Span, T::Symbol, Var),
     /// Assigns the value of the second to the first.
-    AssignIVar(T::Symbol, Var),
+    AssignIVar(Span, T::Symbol, Var),
     /// Assigns to a register in the parent proc.
-    AssignParent(usize, usize, Var),
+    AssignParent(Span, usize, usize, Var),
     /// Start of a rescuable section.
-    BeginRescue(Label),
+    BeginRescue(Span, Label),
     /// Jumps to the label if the current exception matches.
-    RescueMatch(Var, Label),
+    RescueMatch(Span, Var, Label),
     /// Binds the exception to a variable.
-    RescueBind(Var),
+    RescueBind(Span, Var),
     /// Continues unwinding the stack.
-    ContinueRescue,
+    ContinueRescue(Span),
     /// End of a rescuable section.
-    EndRescue,
+    EndRescue(Span),
     /// `defined?` for a constant variable.
-    DefinedConst(Var, T::Symbol),
+    DefinedConst(Span, Var, T::Symbol),
     /// `defined?` for a global variable.
-    DefinedGlobal(Var, T::Symbol),
+    DefinedGlobal(Span, Var, T::Symbol),
     /// `defined?` for a class variable.
-    DefinedClassVar(Var, T::Symbol),
+    DefinedClassVar(Span, Var, T::Symbol),
     /// `defined?` for an instance variable.
-    DefinedIVar(Var, T::Symbol),
+    DefinedIVar(Span, Var, T::Symbol),
     /// Defines a module.
-    DefModule(Var, T::Symbol, IRProc<T>),
+    DefModule(Span, Var, T::Symbol, IRProc<T>),
     /// Defines a class.
-    DefClass(Var, T::Symbol, Option<Var>, IRProc<T>),
+    DefClass(Span, Var, T::Symbol, Option<Var>, IRProc<T>),
     /// Defines a method.
     // TODO: params?
-    DefMethod(T::Symbol, IRProc<T>),
+    DefMethod(Span, T::Symbol, IRProc<T>),
     /// Defines a singleton class.
-    DefSingletonClass(Var, IRProc<T>),
+    DefSingletonClass(Span, Var, IRProc<T>),
     /// Defines a singleton method.
-    DefSingletonMethod(Var, T::Symbol, IRProc<T>),
+    DefSingletonMethod(Span, Var, T::Symbol, IRProc<T>),
     /// Defines a fallback for a parameter.
-    ParamFallback(Var, Label),
+    ParamFallback(Span, Var, Label),
     /// Asserts that the given parameter has a value.
-    Param(Var),
+    Param(Span, Var),
 }
 
 impl<T: SymbolTable> IROp<T> {
@@ -354,61 +354,61 @@ impl<T: SymbolTable> IROp<T> {
     pub(super) fn for_each_var<F: FnMut(&mut Var, bool)>(&mut self, mut cb: F) {
         use IROp::*;
         match self {
-            LoadRoot(var)
-            | LoadBool(var, _)
-            | LoadGlobal(var, _)
-            | LoadClassVar(var, _)
-            | LoadIVar(var, _)
-            | LoadString(var, _)
-            | LoadSymbol(var, _)
-            | LoadI64(var, _)
-            | LoadFloat(var, _)
-            | LoadBlock(var, _)
-            | LoadParent(var, _, _)
-            | Super(var)
-            | RescueBind(var)
-            | ParamFallback(var, _)
-            | Param(var) => cb(var, true),
-            LoadConst(out, inp, _)
-            | AppendString(out, inp)
-            | Call(out, inp, _)
-            | Not(out, inp)
-            | Assign(out, inp) => {
+            LoadRoot(_, var)
+            | LoadBool(_, var, _)
+            | LoadGlobal(_, var, _)
+            | LoadClassVar(_, var, _)
+            | LoadIVar(_, var, _)
+            | LoadString(_, var, _)
+            | LoadSymbol(_, var, _)
+            | LoadI64(_, var, _)
+            | LoadFloat(_, var, _)
+            | LoadBlock(_, var, _)
+            | LoadParent(_, var, _, _)
+            | Super(_, var)
+            | RescueBind(_, var)
+            | ParamFallback(_, var, _)
+            | Param(_, var) => cb(var, true),
+            LoadConst(_, out, inp, _)
+            | AppendString(_, out, inp)
+            | Call(_, out, inp, _)
+            | Not(_, out, inp)
+            | Assign(_, out, inp) => {
                 cb(inp, false);
                 cb(out, true);
             }
-            Arg(var)
-            | ArgBlock(var)
-            | JumpIf(var, _)
-            | JumpIfNot(var, _)
-            | Return(var)
-            | AssignGlobal(_, var)
-            | AssignConst(_, var)
-            | AssignClassVar(_, var)
-            | AssignIVar(_, var)
-            | AssignParent(_, _, var)
-            | RescueMatch(var, _)
-            | DefinedConst(var, _)
-            | DefinedGlobal(var, _)
-            | DefinedClassVar(var, _)
-            | DefinedIVar(var, _)
-            | DefModule(var, _, _)
-            | DefSingletonClass(var, _)
-            | DefSingletonMethod(var, _, _) => cb(var, false),
-            ArgAssoc(var, var2) => {
+            Arg(_, var)
+            | ArgBlock(_, var)
+            | JumpIf(_, var, _)
+            | JumpIfNot(_, var, _)
+            | Return(_, var)
+            | AssignGlobal(_, _, var)
+            | AssignConst(_, _, var)
+            | AssignClassVar(_, _, var)
+            | AssignIVar(_, _, var)
+            | AssignParent(_, _, _, var)
+            | RescueMatch(_, var, _)
+            | DefinedConst(_, var, _)
+            | DefinedGlobal(_, var, _)
+            | DefinedClassVar(_, var, _)
+            | DefinedIVar(_, var, _)
+            | DefModule(_, var, _, _)
+            | DefSingletonClass(_, var, _)
+            | DefSingletonMethod(_, var, _, _) => cb(var, false),
+            ArgAssoc(_, var, var2) => {
                 cb(var, false);
                 cb(var2, false);
             }
-            Label(_) | Jump(_) | BeginRescue(_) | ContinueRescue | EndRescue | DefMethod(_, _) => {
+            Label(_, _) | Jump(_, _) | BeginRescue(_, _) | ContinueRescue(_) | EndRescue(_) | DefMethod(_, _, _) => {
                 ()
             }
-            DefClass(var, _, var2, _) => {
+            DefClass(_, var, _, var2, _) => {
                 cb(var, false);
                 if let Some(var) = var2 {
                     cb(var, false);
                 };
             }
-            CallOne(out, inp, _, arg) => {
+            CallOne(_, out, inp, _, arg) => {
                 cb(inp, false);
                 cb(arg, false);
                 cb(out, true);
@@ -420,53 +420,53 @@ impl<T: SymbolTable> IROp<T> {
     fn is_useless(&self) -> bool {
         use IROp::*;
         match self {
-            LoadRoot(out)
-            | LoadBool(out, _)
-            | LoadGlobal(out, _)
-            | LoadConst(out, _, _)
-            | LoadClassVar(out, _)
-            | LoadIVar(out, _)
-            | LoadString(out, _)
-            | LoadSymbol(out, _)
-            | LoadI64(out, _)
-            | LoadFloat(out, _)
-            | LoadBlock(out, _)
-            | LoadParent(out, _, _)
-            | RescueBind(out)
-            | DefinedConst(out, _)
-            | DefinedGlobal(out, _)
-            | DefinedClassVar(out, _)
-            | DefinedIVar(out, _)
-            | Not(out, _) => *out == Var::Void,
-            Assign(out, inp) => *out == Var::Void || *out == *inp,
-            AppendString(out, inp) => *out == Var::Void || *inp == Var::Nil,
-            JumpIf(cond, _) => *cond == Var::Nil,
-            Arg(_)
-            | ArgAssoc(_, _)
-            | ArgBlock(_)
-            | Call(_, _, _)
-            | CallOne(_, _, _, _)
-            | Super(_)
-            | Label(_)
-            | Jump(_)
-            | JumpIfNot(_, _)
-            | Return(_)
-            | AssignGlobal(_, _)
-            | AssignConst(_, _)
-            | AssignClassVar(_, _)
-            | AssignIVar(_, _)
-            | AssignParent(_, _, _)
-            | BeginRescue(_)
-            | RescueMatch(_, _)
-            | ContinueRescue
-            | EndRescue
-            | DefModule(_, _, _)
-            | DefClass(_, _, _, _)
-            | DefMethod(_, _)
-            | DefSingletonClass(_, _)
-            | DefSingletonMethod(_, _, _)
-            | ParamFallback(_, _)
-            | Param(_) => false,
+            LoadRoot(_, out)
+            | LoadBool(_, out, _)
+            | LoadGlobal(_, out, _)
+            | LoadConst(_, out, _, _)
+            | LoadClassVar(_, out, _)
+            | LoadIVar(_, out, _)
+            | LoadString(_, out, _)
+            | LoadSymbol(_, out, _)
+            | LoadI64(_, out, _)
+            | LoadFloat(_, out, _)
+            | LoadBlock(_, out, _)
+            | LoadParent(_, out, _, _)
+            | RescueBind(_, out)
+            | DefinedConst(_, out, _)
+            | DefinedGlobal(_, out, _)
+            | DefinedClassVar(_, out, _)
+            | DefinedIVar(_, out, _)
+            | Not(_, out, _) => *out == Var::Void,
+            Assign(_, out, inp) => *out == Var::Void || *out == *inp,
+            AppendString(_, out, inp) => *out == Var::Void || *inp == Var::Nil,
+            JumpIf(_, cond, _) => *cond == Var::Nil,
+            Arg(_, _)
+            | ArgAssoc(_, _, _)
+            | ArgBlock(_, _)
+            | Call(_, _, _, _)
+            | CallOne(_, _, _, _, _)
+            | Super(_, _)
+            | Label(_, _)
+            | Jump(_, _)
+            | JumpIfNot(_, _, _)
+            | Return(_, _)
+            | AssignGlobal(_, _, _)
+            | AssignConst(_, _, _)
+            | AssignClassVar(_, _, _)
+            | AssignIVar(_, _, _)
+            | AssignParent(_, _, _, _)
+            | BeginRescue(_, _)
+            | RescueMatch(_, _, _)
+            | ContinueRescue(_)
+            | EndRescue(_)
+            | DefModule(_, _, _, _)
+            | DefClass(_, _, _, _, _)
+            | DefMethod(_, _, _)
+            | DefSingletonClass(_, _, _)
+            | DefSingletonMethod(_, _, _, _)
+            | ParamFallback(_, _, _)
+            | Param(_, _) => false,
         }
     }
 
@@ -481,55 +481,55 @@ impl<T: SymbolTable> IROp<T> {
             };
         }
         match self {
-            IROp::LoadRoot(var) => format!("{} = (::);", var),
-            IROp::LoadBool(var, value) => format!("{} = {};", var, value),
-            IROp::LoadGlobal(var, name) => format!("{} = ${};", var, sym!(name)),
-            IROp::LoadConst(var, parent, name) => format!("{} = {}::{};", var, parent, sym!(name)),
-            IROp::LoadClassVar(var, name) => format!("{} = @@{};", var, sym!(name)),
-            IROp::LoadIVar(var, name) => format!("{} = @{};", var, sym!(name)),
-            IROp::LoadString(var, string) => format!("{} = {:?};", var, string),
-            IROp::AppendString(var, other) => format!("{} += {}.to_s;", var, other),
-            IROp::LoadSymbol(var, symbol) => format!("{} = :{};", var, sym!(symbol)),
-            IROp::LoadI64(var, value) => format!("{} = {};", var, value),
-            IROp::LoadFloat(var, value) => format!("{} = {};", var, value),
-            IROp::LoadBlock(var, proc) => format!("{} = {};", var, proc.fmt_with_symbols(symbols)),
-            IROp::LoadParent(var, i, d) => format!("{} = {}var_{};", var, "^".repeat(*d), i),
-            IROp::Arg(var) => format!("push_arg {};", var),
-            IROp::ArgAssoc(key, val) => format!("push_arg {} => {};", key, val),
-            IROp::ArgBlock(var) => format!("push_arg &{};", var),
-            IROp::Call(out, recv, name) => format!("{} = {}.{}();", out, recv, sym!(name)),
-            IROp::CallOne(out, recv, name, arg) => {
+            IROp::LoadRoot(_, var) => format!("{} = (::);", var),
+            IROp::LoadBool(_, var, value) => format!("{} = {};", var, value),
+            IROp::LoadGlobal(_, var, name) => format!("{} = ${};", var, sym!(name)),
+            IROp::LoadConst(_, var, parent, name) => format!("{} = {}::{};", var, parent, sym!(name)),
+            IROp::LoadClassVar(_, var, name) => format!("{} = @@{};", var, sym!(name)),
+            IROp::LoadIVar(_, var, name) => format!("{} = @{};", var, sym!(name)),
+            IROp::LoadString(_, var, string) => format!("{} = {:?};", var, string),
+            IROp::AppendString(_, var, other) => format!("{} += {}.to_s;", var, other),
+            IROp::LoadSymbol(_, var, symbol) => format!("{} = :{};", var, sym!(symbol)),
+            IROp::LoadI64(_, var, value) => format!("{} = {};", var, value),
+            IROp::LoadFloat(_, var, value) => format!("{} = {};", var, value),
+            IROp::LoadBlock(_, var, proc) => format!("{} = {};", var, proc.fmt_with_symbols(symbols)),
+            IROp::LoadParent(_, var, i, d) => format!("{} = {}var_{};", var, "^".repeat(*d), i),
+            IROp::Arg(_, var) => format!("push_arg {};", var),
+            IROp::ArgAssoc(_, key, val) => format!("push_arg {} => {};", key, val),
+            IROp::ArgBlock(_, var) => format!("push_arg &{};", var),
+            IROp::Call(_, out, recv, name) => format!("{} = {}.{}();", out, recv, sym!(name)),
+            IROp::CallOne(_, out, recv, name, arg) => {
                 format!("{} = {}.{}({});", out, recv, sym!(name), arg)
             }
-            IROp::Super(out) => format!("{} = super();", out),
-            IROp::Not(out, var) => format!("{} = not {};", out, var),
-            IROp::Label(label) => format!("{}", label),
-            IROp::Jump(label) => format!("jump -> {};", label),
-            IROp::JumpIf(cond, label) => format!("if {} jump -> {};", cond, label),
-            IROp::JumpIfNot(cond, label) => format!("if not {} jump -> {};", cond, label),
-            IROp::Return(var) => format!("return {};", var),
-            IROp::Assign(lhs, rhs) => format!("{} = {};", lhs, rhs),
-            IROp::AssignGlobal(name, rhs) => format!("${} = {};", sym!(name), rhs),
-            IROp::AssignConst(name, rhs) => format!("{} = {};", sym!(name), rhs),
-            IROp::AssignClassVar(name, rhs) => format!("@@{} = {};", sym!(name), rhs),
-            IROp::AssignIVar(name, rhs) => format!("@{} = {};", sym!(name), rhs),
-            IROp::AssignParent(i, d, rhs) => format!("{}var_{} = {};", "^".repeat(*d), i, rhs),
-            IROp::BeginRescue(label) => format!("begin rescue (rescue -> {})", label),
-            IROp::RescueMatch(class, label) => format!("rescue instanceof {} -> {}", class, label),
-            IROp::RescueBind(var) => format!("rescue => {};", var),
-            IROp::ContinueRescue => format!("continue rescue;"),
-            IROp::EndRescue => format!("end rescue;"),
-            IROp::DefinedConst(var, name) => format!("{} = defined? {};", var, sym!(name)),
-            IROp::DefinedGlobal(var, name) => format!("{} = defined? ${};", var, sym!(name)),
-            IROp::DefinedClassVar(var, name) => format!("{} = defined? @@{};", var, sym!(name)),
-            IROp::DefinedIVar(var, name) => format!("{} = defined? ${};", var, sym!(name)),
-            IROp::DefModule(parent, name, proc) => format!(
+            IROp::Super(_, out) => format!("{} = super();", out),
+            IROp::Not(_, out, var) => format!("{} = not {};", out, var),
+            IROp::Label(_, label) => format!("{}", label),
+            IROp::Jump(_, label) => format!("jump -> {};", label),
+            IROp::JumpIf(_, cond, label) => format!("if {} jump -> {};", cond, label),
+            IROp::JumpIfNot(_, cond, label) => format!("if not {} jump -> {};", cond, label),
+            IROp::Return(_, var) => format!("return {};", var),
+            IROp::Assign(_, lhs, rhs) => format!("{} = {};", lhs, rhs),
+            IROp::AssignGlobal(_, name, rhs) => format!("${} = {};", sym!(name), rhs),
+            IROp::AssignConst(_, name, rhs) => format!("{} = {};", sym!(name), rhs),
+            IROp::AssignClassVar(_, name, rhs) => format!("@@{} = {};", sym!(name), rhs),
+            IROp::AssignIVar(_, name, rhs) => format!("@{} = {};", sym!(name), rhs),
+            IROp::AssignParent(_, i, d, rhs) => format!("{}var_{} = {};", "^".repeat(*d), i, rhs),
+            IROp::BeginRescue(_, label) => format!("begin rescue (rescue -> {})", label),
+            IROp::RescueMatch(_, class, label) => format!("rescue instanceof {} -> {}", class, label),
+            IROp::RescueBind(_, var) => format!("rescue => {};", var),
+            IROp::ContinueRescue(_) => format!("continue rescue;"),
+            IROp::EndRescue(_) => format!("end rescue;"),
+            IROp::DefinedConst(_, var, name) => format!("{} = defined? {};", var, sym!(name)),
+            IROp::DefinedGlobal(_, var, name) => format!("{} = defined? ${};", var, sym!(name)),
+            IROp::DefinedClassVar(_, var, name) => format!("{} = defined? @@{};", var, sym!(name)),
+            IROp::DefinedIVar(_, var, name) => format!("{} = defined? ${};", var, sym!(name)),
+            IROp::DefModule(_, parent, name, proc) => format!(
                 "module {}::{}: {}",
                 parent,
                 sym!(name),
                 proc.fmt_with_symbols(symbols)
             ),
-            IROp::DefClass(parent, name, superclass, proc) => match superclass {
+            IROp::DefClass(_, parent, name, superclass, proc) => match superclass {
                 Some(superclass) => format!(
                     "class {}::{} < {}: {}",
                     parent,
@@ -544,20 +544,20 @@ impl<T: SymbolTable> IROp<T> {
                     proc.fmt_with_symbols(symbols)
                 ),
             },
-            IROp::DefMethod(name, proc) => {
+            IROp::DefMethod(_, name, proc) => {
                 format!("def {}: {}", sym!(name), proc.fmt_with_symbols(symbols))
             }
-            IROp::DefSingletonClass(expr, proc) => {
+            IROp::DefSingletonClass(_, expr, proc) => {
                 format!("class << {}: {}", expr, proc.fmt_with_symbols(symbols))
             }
-            IROp::DefSingletonMethod(expr, name, proc) => format!(
+            IROp::DefSingletonMethod(_, expr, name, proc) => format!(
                 "def {}.{}: {}",
                 expr,
                 sym!(name),
                 proc.fmt_with_symbols(symbols)
             ),
-            IROp::ParamFallback(var, label) => format!("if param {} given -> {};", var, label),
-            IROp::Param(var) => format!("(param {})", var),
+            IROp::ParamFallback(_, var, label) => format!("if param {} given -> {};", var, label),
+            IROp::Param(_, var) => format!("(param {})", var),
         }
     }
 }
@@ -753,12 +753,12 @@ impl<T: SymbolTable> IRProc<T> {
 
         for item in &mut self.items {
             match item {
-                IROp::LoadBlock(_, proc)
-                | IROp::DefModule(_, _, proc)
-                | IROp::DefClass(_, _, _, proc)
-                | IROp::DefMethod(_, proc)
-                | IROp::DefSingletonClass(_, proc)
-                | IROp::DefSingletonMethod(_, _, proc) => proc.optimize(),
+                IROp::LoadBlock(_, _, proc)
+                | IROp::DefModule(_, _, _, proc)
+                | IROp::DefClass(_, _, _, _, proc)
+                | IROp::DefMethod(_, _, proc)
+                | IROp::DefSingletonClass(_, _, proc)
+                | IROp::DefSingletonMethod(_, _, _, proc) => proc.optimize(),
                 _ => (),
             }
         }
@@ -1009,69 +1009,70 @@ impl<T: SymbolTable> IRProc<T> {
     }
 
     fn expand_statement(
-        statement: &Statement,
+        statement: &Spanned<Statement>,
         out: Option<Var>,
         scope: &mut Scope<T>,
         items: &mut Vec<IROp<T>>,
     ) -> Result<(), IRError> {
-        match statement {
+        let span = statement.1;
+        match statement.0 {
             Statement::Expr(expr) => {
-                let value = Self::expand_expr(expr, scope, items)?;
+                let value = Self::expand_expr(&expr, scope, items)?;
                 if let Some(out) = out {
-                    items.push(IROp::Assign(out, value));
+                    items.push(IROp::Assign(expr.1, out, value));
                 }
             }
             Statement::Alias(..) => unimplemented!("alias statement"),
             Statement::Undef(..) => unimplemented!("undef statement"),
             Statement::IfMod(statement, cond) => {
                 let end_label = scope.next_label();
-                let cond = Self::expand_expr(cond, scope, items)?;
-                items.push(IROp::JumpIfNot(cond, end_label));
-                Self::expand_statement(statement, out, scope, items)?;
-                items.push(IROp::Label(end_label));
+                let cond_var = Self::expand_expr(&cond, scope, items)?;
+                items.push(IROp::JumpIfNot(cond.1, cond_var, end_label));
+                Self::expand_statement(&statement, out, scope, items)?;
+                items.push(IROp::Label(statement.1, end_label));
             }
             Statement::UnlessMod(statement, cond) => {
                 let end_label = scope.next_label();
-                let cond = Self::expand_expr(cond, scope, items)?;
-                items.push(IROp::JumpIf(cond, end_label));
-                Self::expand_statement(statement, out, scope, items)?;
-                items.push(IROp::Label(end_label));
+                let cond_var = Self::expand_expr(&cond, scope, items)?;
+                items.push(IROp::JumpIf(cond.1, cond_var, end_label));
+                Self::expand_statement(&statement, out, scope, items)?;
+                items.push(IROp::Label(statement.1, end_label));
             }
             Statement::WhileMod(statement, cond) => {
                 let top_label = scope.next_label();
                 let end_label = scope.next_label();
-                items.push(IROp::Label(top_label));
-                let cond = Self::expand_expr(cond, scope, items)?;
-                items.push(IROp::JumpIfNot(cond, end_label));
-                Self::expand_statement(statement, out, scope, items)?;
-                items.push(IROp::Jump(top_label));
-                items.push(IROp::Label(end_label));
+                items.push(IROp::Label(statement.1, top_label));
+                let cond_var = Self::expand_expr(&cond, scope, items)?;
+                items.push(IROp::JumpIfNot(cond.1, cond_var, end_label));
+                Self::expand_statement(&statement, out, scope, items)?;
+                items.push(IROp::Jump(statement.1, top_label));
+                items.push(IROp::Label(statement.1, end_label));
             }
             Statement::UntilMod(statement, cond) => {
                 let top_label = scope.next_label();
                 let end_label = scope.next_label();
-                items.push(IROp::Label(top_label));
-                let cond = Self::expand_expr(cond, scope, items)?;
-                items.push(IROp::JumpIf(cond, end_label));
-                Self::expand_statement(statement, out, scope, items)?;
-                items.push(IROp::Jump(top_label));
-                items.push(IROp::Label(end_label));
+                items.push(IROp::Label(statement.1, top_label));
+                let cond_var = Self::expand_expr(&cond, scope, items)?;
+                items.push(IROp::JumpIf(cond.1, cond_var, end_label));
+                Self::expand_statement(&statement, out, scope, items)?;
+                items.push(IROp::Jump(statement.1, top_label));
+                items.push(IROp::Label(statement.1, end_label));
             }
             Statement::MultiAssign(lhs, rhs) => {
-                if lhs.len() == 1 && rhs.items.len() == 1 && rhs.splat.is_none() {
-                    match &lhs[0] {
-                        MultiLHSItem::LHS(lhs) => match lhs {
-                            LeftHandSide::Var(ident) => match ident {
+                if lhs.0.len() == 1 && rhs.0.items.len() == 1 && rhs.0.splat.is_none() {
+                    match &lhs.0[0].0 {
+                        MultiLHSItem::LHS(lhs) => match lhs.0 {
+                            LeftHandSide::Var(ident) => match ident.0 {
                                 Ident::Local(name) => {
-                                    let name = scope.symbol(name);
+                                    let name = scope.symbol(&name);
                                     let var = scope.define_local_var(name);
-                                    let value = Self::expand_expr(&rhs.items[0], scope, items)?;
+                                    let value = Self::expand_expr(&rhs.0.items[0], scope, items)?;
                                     match var {
                                         MaybeLocalVar::Local(var) => {
-                                            items.push(IROp::Assign(var, value));
+                                            items.push(IROp::Assign(span, var, value));
                                         }
                                         MaybeLocalVar::Parent(i, d) => {
-                                            items.push(IROp::AssignParent(i, d, value));
+                                            items.push(IROp::AssignParent(span, i, d, value));
                                         }
                                     }
                                 }
@@ -1092,7 +1093,7 @@ impl<T: SymbolTable> IRProc<T> {
     }
 
     fn expand_statements(
-        statements: &[Statement],
+        statements: &[Spanned<Statement>],
         out: Var,
         scope: &mut Scope<T>,
         items: &mut Vec<IROp<T>>,
@@ -1111,91 +1112,92 @@ impl<T: SymbolTable> IRProc<T> {
     }
 
     fn expand_expr(
-        expr: &Expression,
+        expr: &Spanned<Expression>,
         scope: &mut Scope<T>,
         items: &mut Vec<IROp<T>>,
     ) -> Result<Var, IRError> {
-        match expr {
+        let span = expr.1;
+        match expr.0 {
             Expression::Variable(ident) => Self::load_var(ident, scope, items),
-            Expression::RootConst(ident) => match ident {
+            Expression::RootConst(ident) => match ident.0 {
                 Ident::Const(name) => {
-                    let name = scope.symbol(name);
+                    let name = scope.symbol(&name);
                     let out = scope.next_var();
-                    items.push(IROp::LoadRoot(out));
-                    items.push(IROp::LoadConst(out, out, name));
+                    items.push(IROp::LoadRoot(ident.1, out));
+                    items.push(IROp::LoadConst(span, out, out, name));
                     Ok(out)
                 }
-                _ => Err(IRError::InvalidConstPath(ident.clone())),
+                _ => Err(IRError::InvalidConstPath(ident.0.clone())),
             },
-            Expression::SubConst(expr, ident) => match ident {
+            Expression::SubConst(expr, ident) => match ident.0 {
                 Ident::Const(name) => {
-                    let name = scope.symbol(name);
-                    let expr = Self::expand_expr(expr, scope, items)?;
+                    let name = scope.symbol(&name);
+                    let expr = Self::expand_expr(&expr, scope, items)?;
                     let out = scope.next_var();
-                    items.push(IROp::LoadConst(out, expr, name));
+                    items.push(IROp::LoadConst(span, out, expr, name));
                     Ok(out)
                 }
-                _ => Err(IRError::InvalidConstPath(ident.clone())),
+                _ => Err(IRError::InvalidConstPath(ident.0.clone())),
             },
             Expression::Literal(literal) => {
                 let out = scope.next_var();
-                match literal {
+                match literal.0 {
                     Literal::Number { positive, value } => {
-                        if let Some(number) = Self::number_to_i64(*positive, value) {
-                            items.push(IROp::LoadI64(out, number));
-                        } else if let Some(number) = Self::number_to_float(*positive, value) {
-                            items.push(IROp::LoadFloat(out, number));
+                        if let Some(number) = Self::number_to_i64(positive, &value) {
+                            items.push(IROp::LoadI64(span, out, number));
+                        } else if let Some(number) = Self::number_to_float(positive, &value) {
+                            items.push(IROp::LoadFloat(span, out, number));
                         } else {
                             unimplemented!("load float or bignum")
                         }
                     }
                     Literal::String(string) => {
-                        items.push(IROp::LoadString(out, string.clone()));
+                        items.push(IROp::LoadString(span, out, string.clone()));
                     }
                     Literal::QuotedString(fragments) => {
                         for (i, fragment) in fragments.iter().enumerate() {
                             if i == 0 {
                                 match fragment {
                                     QuotedFragment::String(string) => {
-                                        items.push(IROp::LoadString(out, string.clone()));
+                                        items.push(IROp::LoadString(span, out, string.clone()));
                                     }
                                     QuotedFragment::Ident(ident) => {
                                         let var = Self::load_var(ident, scope, items)?;
-                                        items.push(IROp::LoadString(out, "".into()));
-                                        items.push(IROp::AppendString(out, var));
+                                        items.push(IROp::LoadString(span, out, "".into()));
+                                        items.push(IROp::AppendString(span, out, var));
                                     }
                                     QuotedFragment::Interpolated(statements) => {
                                         // FIXME: statements probably have values too idk
                                         let value = scope.next_var();
                                         Self::expand_statements(statements, value, scope, items)?;
-                                        items.push(IROp::LoadString(out, "".into()));
-                                        items.push(IROp::AppendString(out, value));
+                                        items.push(IROp::LoadString(span, out, "".into()));
+                                        items.push(IROp::AppendString(span, out, value));
                                     }
                                 }
                             } else {
                                 match fragment {
                                     QuotedFragment::String(string) => {
                                         let tmp = scope.next_var();
-                                        items.push(IROp::LoadString(tmp, string.clone()));
-                                        items.push(IROp::AppendString(out, tmp));
+                                        items.push(IROp::LoadString(span, tmp, string.clone()));
+                                        items.push(IROp::AppendString(span, out, tmp));
                                     }
                                     QuotedFragment::Ident(ident) => {
                                         let var = Self::load_var(ident, scope, items)?;
-                                        items.push(IROp::AppendString(out, var));
+                                        items.push(IROp::AppendString(span, out, var));
                                     }
                                     QuotedFragment::Interpolated(statements) => {
                                         // FIXME: statements probably have values too idk
                                         let value = scope.next_var();
                                         Self::expand_statements(statements, value, scope, items)?;
-                                        items.push(IROp::AppendString(out, value));
+                                        items.push(IROp::AppendString(span, out, value));
                                     }
                                 }
                             }
                         }
                     }
                     Literal::Symbol(symbol) => {
-                        let symbol = scope.symbol(symbol);
-                        items.push(IROp::LoadSymbol(out, symbol));
+                        let symbol = scope.symbol(&symbol);
+                        items.push(IROp::LoadSymbol(span, out, symbol));
                     }
                 }
                 Ok(out)
@@ -1214,14 +1216,14 @@ impl<T: SymbolTable> IRProc<T> {
                     scope.sub_scope(&mut variables, &mut captured_vars, &mut may_be_captured)
                 };
                 let mut params =
-                    Self::expand_params(&block.params, &mut block_scope, &mut block_items)?;
+                    Self::expand_params(&block.0.params, &mut block_scope, &mut block_items)?;
                 block_scope.block_var = params.block;
                 let out = block_scope.next_var();
-                Self::expand_statements(&block.body, out, &mut block_scope, &mut block_items)?;
-                block_items.push(IROp::Return(out));
+                Self::expand_statements(&block.0.body, out, &mut block_scope, &mut block_items)?;
+                block_items.push(IROp::Return(span, out));
                 params.block = block_scope.block_var;
 
-                let name = if block.lambda {
+                let name = if block.0.lambda {
                     scope.symbol("[lambda]")
                 } else {
                     scope.symbol("[block]")
@@ -1239,31 +1241,34 @@ impl<T: SymbolTable> IRProc<T> {
                 };
 
                 let out = scope.next_var();
-                items.push(IROp::LoadBlock(out, proc));
+                items.push(IROp::LoadBlock(span, out, proc));
                 Ok(out)
             }
-            Expression::Nil => Ok(Var::Nil),
-            Expression::SelfExpr => Ok(Var::SelfRef),
-            Expression::True | Expression::False => {
-                let is_true = expr == &Expression::True;
+            Expression::Nil(_) => Ok(Var::Nil),
+            Expression::SelfExpr(_) => Ok(Var::SelfRef),
+            Expression::True(Spanned(_, span)) | Expression::False(Spanned(_, span)) => {
+                let is_true = match expr {
+                    Expression::True(_) => true,
+                    _ => false
+                };
                 let out = scope.next_var();
-                items.push(IROp::LoadBool(out, is_true));
+                items.push(IROp::LoadBool(span, out, is_true));
                 Ok(out)
             }
             Expression::ArrayConstructor(args) => {
                 let out = scope.next_var();
-                items.push(IROp::LoadRoot(out));
-                items.push(IROp::LoadConst(out, out, scope.symbol("Array")));
+                items.push(IROp::LoadRoot(span, out));
+                items.push(IROp::LoadConst(span, out, out, scope.symbol("Array")));
                 if let Some(args) = args {
-                    Self::expand_args(args, scope, items)?;
+                    Self::expand_args(&args, scope, items)?;
                 }
-                items.push(IROp::Call(out, out, scope.symbol("new")));
+                items.push(IROp::Call(span, out, out, scope.symbol("new")));
                 Ok(out)
             }
             Expression::HashConstructor(args) => {
                 let out = scope.next_var();
-                items.push(IROp::LoadRoot(out));
-                items.push(IROp::LoadConst(out, out, scope.symbol("Hash")));
+                items.push(IROp::LoadRoot(span, out));
+                items.push(IROp::LoadConst(span, out, out, scope.symbol("Hash")));
                 Self::expand_args(
                     &Arguments {
                         block: None,
@@ -1273,68 +1278,68 @@ impl<T: SymbolTable> IRProc<T> {
                     scope,
                     items,
                 )?;
-                items.push(IROp::Call(out, out, scope.symbol("new")));
+                items.push(IROp::Call(span, out, out, scope.symbol("new")));
                 Ok(out)
             }
             Expression::Not(expr) => {
                 let expr = Self::expand_expr(expr, scope, items)?;
-                items.push(IROp::Not(expr, expr));
+                items.push(IROp::Not(span, expr, expr));
                 Ok(expr)
             }
             Expression::UMinus(expr) => {
                 let out = Self::expand_expr(expr, scope, items)?;
-                items.push(IROp::Call(out, out, scope.symbol("-@")));
+                items.push(IROp::Call(span, out, out, scope.symbol("-@")));
                 Ok(out)
             }
             Expression::UPlus(expr) => {
-                let out = Self::expand_expr(expr, scope, items)?;
-                items.push(IROp::Call(out, out, scope.symbol("+@")));
+                let out = Self::expand_expr(&expr, scope, items)?;
+                items.push(IROp::Call(span, out, out, scope.symbol("+@")));
                 Ok(out)
             }
             Expression::BitInv(expr) => {
-                let out = Self::expand_expr(expr, scope, items)?;
-                items.push(IROp::Call(out, out, scope.symbol("~")));
+                let out = Self::expand_expr(&expr, scope, items)?;
+                items.push(IROp::Call(span, out, out, scope.symbol("~")));
                 Ok(out)
             }
             Expression::BinOp(lhs, op, rhs) => {
                 use sapphire_parser::ast::BinaryOp::*;
                 let out = scope.next_var();
 
-                if let KeywordAnd = op {
+                if let KeywordAnd = op.0 {
                     // short-circuited && implemented as follows:
                     // result = LHS
                     // if not result goto end
                     // rhs = RHS
                     // result = rhs
                     // end:
-                    let lhs = Self::expand_expr(lhs, scope, items)?;
+                    let lhs = Self::expand_expr(&lhs, scope, items)?;
                     let end_label = scope.next_label();
-                    items.push(IROp::Assign(out, lhs));
-                    items.push(IROp::JumpIfNot(out, end_label));
-                    let rhs = Self::expand_expr(rhs, scope, items)?;
-                    items.push(IROp::Assign(out, rhs));
-                    items.push(IROp::Label(end_label));
+                    items.push(IROp::Assign(span, out, lhs));
+                    items.push(IROp::JumpIfNot(span, out, end_label));
+                    let rhs = Self::expand_expr(&rhs, scope, items)?;
+                    items.push(IROp::Assign(span, out, rhs));
+                    items.push(IROp::Label(span, end_label));
                     Ok(out)
-                } else if let KeywordOr = op {
+                } else if let KeywordOr = op.0 {
                     // short-circuited || implemented as follows:
                     // result = LHS
                     // if result goto end
                     // rhs = RHS
                     // result = rhs
                     // end:
-                    let lhs = Self::expand_expr(lhs, scope, items)?;
+                    let lhs = Self::expand_expr(&lhs, scope, items)?;
                     let end_label = scope.next_label();
-                    items.push(IROp::Assign(out, lhs));
-                    items.push(IROp::JumpIf(out, end_label));
-                    let rhs = Self::expand_expr(rhs, scope, items)?;
-                    items.push(IROp::Assign(out, rhs));
-                    items.push(IROp::Label(end_label));
+                    items.push(IROp::Assign(span, out, lhs));
+                    items.push(IROp::JumpIf(span, out, end_label));
+                    let rhs = Self::expand_expr(&rhs, scope, items)?;
+                    items.push(IROp::Assign(span, out, rhs));
+                    items.push(IROp::Label(span, end_label));
                     Ok(out)
                 } else {
-                    let lhs = Self::expand_expr(lhs, scope, items)?;
-                    let rhs = Self::expand_expr(rhs, scope, items)?;
+                    let lhs = Self::expand_expr(&lhs, scope, items)?;
+                    let rhs = Self::expand_expr(&rhs, scope, items)?;
 
-                    let op = match op {
+                    let op = match op.0 {
                         Neq => "!=",
                         NMatch => "!~",
                         And => "&&",
@@ -1361,7 +1366,7 @@ impl<T: SymbolTable> IRProc<T> {
                         KeywordAnd | KeywordOr => unreachable!(),
                     };
 
-                    items.push(IROp::CallOne(out, lhs, scope.symbol(op), rhs));
+                    items.push(IROp::CallOne(span, out, lhs, scope.symbol(op), rhs));
                     Ok(out)
                 }
             }
@@ -1379,50 +1384,50 @@ impl<T: SymbolTable> IRProc<T> {
                 let end_label = scope.next_label();
                 let out = scope.next_var();
                 for (cond, then) in
-                    iter::once((&**cond, &**then)).chain(elsif.iter().map(|(c, t)| (&*c, &**t)))
+                    iter::once((&*cond, &then)).chain(elsif.iter().map(|Spanned((c, t), _)| (&*c, &*t)))
                 {
                     let next_label = scope.next_label();
-                    let cond = Self::expand_expr(cond, scope, items)?;
-                    items.push(IROp::JumpIfNot(cond, next_label));
-                    Self::expand_statements(then, out, scope, items)?;
-                    items.push(IROp::Jump(end_label));
-                    items.push(IROp::Label(next_label));
+                    let cond_var = Self::expand_expr(cond, scope, items)?;
+                    items.push(IROp::JumpIfNot(cond.1, cond_var, next_label));
+                    Self::expand_statements(&then.0, out, scope, items)?;
+                    items.push(IROp::Jump(span, end_label));
+                    items.push(IROp::Label(span, next_label));
                 }
 
                 if let Some(else_) = else_ {
-                    Self::expand_statements(else_, out, scope, items)?;
+                    Self::expand_statements(&else_.0, out, scope, items)?;
                 }
 
-                items.push(IROp::Label(end_label));
+                items.push(IROp::Label(span, end_label));
 
                 Ok(out)
             }
             Expression::Ternary { cond, then, else_ } => {
-                let cond = Self::expand_expr(cond, scope, items)?;
+                let cond = Self::expand_expr(&cond, scope, items)?;
                 let else_label = scope.next_label();
                 let end_label = scope.next_label();
-                items.push(IROp::JumpIfNot(cond, else_label));
-                let out = Self::expand_expr(then, scope, items)?;
-                items.push(IROp::Jump(end_label));
-                items.push(IROp::Label(else_label));
-                let else_ = Self::expand_expr(else_, scope, items)?;
-                items.push(IROp::Assign(out, else_));
-                items.push(IROp::Label(end_label));
+                items.push(IROp::JumpIfNot(span, cond, else_label));
+                let out = Self::expand_expr(&then, scope, items)?;
+                items.push(IROp::Jump(span, end_label));
+                items.push(IROp::Label(span, else_label));
+                let else_ = Self::expand_expr(&else_, scope, items)?;
+                items.push(IROp::Assign(span, out, else_));
+                items.push(IROp::Label(span, end_label));
                 Ok(out)
             }
             Expression::Unless { cond, then, else_ } => {
-                let cond = Self::expand_expr(cond, scope, items)?;
+                let cond = Self::expand_expr(&cond, scope, items)?;
                 let else_label = scope.next_label();
                 let end_label = scope.next_label();
                 let out = scope.next_var();
-                items.push(IROp::JumpIf(cond, else_label));
-                Self::expand_statements(then, out, scope, items)?;
-                items.push(IROp::Jump(end_label));
-                items.push(IROp::Label(else_label));
+                items.push(IROp::JumpIf(span, cond, else_label));
+                Self::expand_statements(&then.0, out, scope, items)?;
+                items.push(IROp::Jump(span, end_label));
+                items.push(IROp::Label(span, else_label));
                 if let Some(else_) = else_ {
-                    Self::expand_statements(else_, out, scope, items)?;
+                    Self::expand_statements(&else_.0, out, scope, items)?;
                 }
-                items.push(IROp::Label(end_label));
+                items.push(IROp::Label(span, end_label));
                 Ok(out)
             }
             Expression::Case {
@@ -1433,36 +1438,36 @@ impl<T: SymbolTable> IRProc<T> {
             Expression::While(cond, body) => {
                 let top_label = scope.next_label();
                 let end_label = scope.next_label();
-                items.push(IROp::Label(top_label));
-                let cond = Self::expand_expr(cond, scope, items)?;
-                items.push(IROp::JumpIfNot(cond, end_label));
+                items.push(IROp::Label(span, top_label));
+                let cond = Self::expand_expr(&cond, scope, items)?;
+                items.push(IROp::JumpIfNot(span, cond, end_label));
                 let out = scope.next_var();
-                Self::expand_statements(body, out, scope, items)?;
-                items.push(IROp::Jump(top_label));
-                items.push(IROp::Label(end_label));
+                Self::expand_statements(&body.0, out, scope, items)?;
+                items.push(IROp::Jump(span, top_label));
+                items.push(IROp::Label(span, end_label));
                 let out = scope.next_var();
                 Ok(out)
             }
             Expression::Until(cond, body) => {
                 let top_label = scope.next_label();
                 let end_label = scope.next_label();
-                items.push(IROp::Label(top_label));
-                let cond = Self::expand_expr(cond, scope, items)?;
-                items.push(IROp::JumpIf(cond, end_label));
+                items.push(IROp::Label(span, top_label));
+                let cond = Self::expand_expr(&cond, scope, items)?;
+                items.push(IROp::JumpIf(span, cond, end_label));
                 let out = scope.next_var();
-                Self::expand_statements(body, out, scope, items)?;
-                items.push(IROp::Jump(top_label));
-                items.push(IROp::Label(end_label));
+                Self::expand_statements(&body.0, out, scope, items)?;
+                items.push(IROp::Jump(span, top_label));
+                items.push(IROp::Label(span, end_label));
                 let out = scope.next_var();
                 Ok(out)
             }
             Expression::For(lhs, expr, body) => {
-                let simple_for = match &**expr {
+                let simple_for = match &*expr {
                     Expression::Range {
                         start,
                         end,
                         inclusive,
-                    } => match (start.as_ref().map(|b| &**b), end.as_ref().map(|b| &**b)) {
+                    } => match (start.as_ref().map(|b| &**b.0), end.as_ref().map(|b| &**b.0)) {
                         (
                             Some(Expression::Literal(Literal::Number {
                                 positive: start_positive,

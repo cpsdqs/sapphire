@@ -1,4 +1,5 @@
 //! Parser generator.
+#![recursion_limit="128"]
 
 extern crate proc_macro;
 
@@ -417,10 +418,11 @@ impl Symbol {
 
         let tokens = quote_spanned! { span =>
             #attrs
-            fn #name(i: Cursor) -> IResult<#ty> {
+            fn #name(i: Cursor) -> IResult<Spanned<#ty>> {
                 if let Some(err) = i.cached_err(stringify!(#name)) {
                     return Err(err);
                 }
+                let start_pos = i.pos();
 
                 let res: IResult<#ty> = { #contents };
 
@@ -428,7 +430,10 @@ impl Symbol {
                     i.cache_err(stringify!(#name), err.clone());
                 }
 
-                res
+                let end_pos = i.pos();
+                let span = Span(start_pos, end_pos);
+
+                res.map(|(cursor, node)| (cursor, Spanned(node, span)))
             }
         };
         tokens.into()

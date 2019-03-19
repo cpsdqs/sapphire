@@ -3,6 +3,25 @@
 use crate::lex::{Token, UnsignedNumeric};
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Span(pub usize, pub usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Spanned<T>(pub T, pub Span);
+
+impl<T> Spanned<Option<T>> {
+    pub fn map<F: Fn(T) -> U, U>(self, f: F) -> Spanned<Option<U>> {
+        Spanned(self.0.map(f), self.1)
+    }
+}
+impl<T: Default> Spanned<Option<T>> {
+    pub fn unwrap_or_default(self) -> Spanned<T> {
+        match self.0 {
+            Some(inner) => Spanned(inner, self.1),
+            None => Spanned(T::default(), self.1),
+        }
+    }
+}
+
 /// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Ident {
@@ -25,15 +44,27 @@ impl Ident {
     }
 }
 
-impl<'input> From<Token<'input>> for Ident {
-    fn from(token: Token<'input>) -> Ident {
+impl<'input> From<&Token<'input>> for Ident {
+    fn from(token: &Token<'input>) -> Ident {
+        let spanned: Spanned<Ident> = Spanned(token, Span::default()).into();
+        spanned.0
+    }
+}
+impl<'input> From<Spanned<&Token<'input>>> for Ident {
+    fn from(token: Spanned<&Token<'input>>) -> Ident {
+        let spanned: Spanned<Ident> = token.into();
+        spanned.0
+    }
+}
+impl<'input> From<Spanned<&Token<'input>>> for Spanned<Ident> {
+    fn from(token: Spanned<&Token<'input>>) -> Spanned<Ident> {
         use Token::*;
-        match token {
-            ILocal(l) => Ident::Local(l.into()),
-            IGlobal(g) => Ident::Global(g.into()),
-            IConstant(c) => Ident::Const(c.into()),
-            IClass(c) => Ident::Class(c.into()),
-            IInstance(i) => Ident::Instance(i.into()),
+        let inner = match token.0 {
+            ILocal(l) => Ident::Local(l.to_string()),
+            IGlobal(g) => Ident::Global(g.to_string()),
+            IConstant(c) => Ident::Const(c.to_string()),
+            IClass(c) => Ident::Class(c.to_string()),
+            IInstance(i) => Ident::Instance(i.to_string()),
             IMethodOnly(i, s) => Ident::MethodOnly(format!("{}{}", i, s)),
             IAssignmentLikeMethod(i) => Ident::AssignmentMethod(format!("{}=", i)),
             K__LINE__ => Ident::Keyword("__LINE__"),
@@ -102,7 +133,8 @@ impl<'input> From<Token<'input>> for Ident {
             OAssignIndex => Ident::Keyword("[]="),
             OIndex => Ident::Keyword("[]"),
             token => panic!("don’t know how to turn {:?} into an identifier", token),
-        }
+        };
+        Spanned(inner, token.1)
     }
 }
 
@@ -139,9 +171,9 @@ pub enum AssignmentOp {
     Pow,
 }
 
-impl<'input> From<Token<'input>> for AssignmentOp {
-    fn from(token: Token<'input>) -> AssignmentOp {
-        match token {
+impl<'input> From<Spanned<&Token<'input>>> for Spanned<AssignmentOp> {
+    fn from(token: Spanned<&Token<'input>>) -> Spanned<AssignmentOp> {
+        let inner = match token.0 {
             Token::OAssignAnd => AssignmentOp::And,
             Token::OAssignOr => AssignmentOp::Or,
             Token::OAssignBitAnd => AssignmentOp::BitAnd,
@@ -159,7 +191,8 @@ impl<'input> From<Token<'input>> for AssignmentOp {
                 "don’t know how to turn {:?} into an assignment operation",
                 token
             ),
-        }
+        };
+        Spanned(inner, token.1)
     }
 }
 
@@ -193,9 +226,9 @@ pub enum BinaryOp {
     Rem,
 }
 
-impl<'input> From<Token<'input>> for BinaryOp {
-    fn from(token: Token<'input>) -> BinaryOp {
-        match token {
+impl<'input> From<Spanned<&Token<'input>>> for Spanned<BinaryOp> {
+    fn from(token: Spanned<&Token<'input>>) -> Spanned<BinaryOp> {
+        let inner = match token.0 {
             Token::ONeq => BinaryOp::Neq,
             Token::ONMatch => BinaryOp::NMatch,
             Token::OAnd => BinaryOp::And,
@@ -225,103 +258,104 @@ impl<'input> From<Token<'input>> for BinaryOp {
                 "don’t know how to turn {:?} into a binary operation",
                 token
             ),
-        }
+        };
+        Spanned(inner, token.1)
     }
 }
 
 /// A list of statements.
-pub type StatementList = Vec<Statement>;
+pub type StatementList = Vec<Spanned<Statement>>;
 
 /// An identifier reference; used in statements like `undef`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IdentRef {
-    Symbol(String),
-    Ident(Ident),
+    Symbol(Spanned<String>),
+    Ident(Spanned<Ident>),
 }
 
 /// A statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Statement {
     /// An expression statement.
-    Expr(Expression),
+    Expr(Spanned<Expression>),
     /// `alias .0 .1`
-    Alias(IdentRef, IdentRef),
+    Alias(Spanned<IdentRef>, Spanned<IdentRef>),
     /// `undef .0`
-    Undef(Vec<IdentRef>),
+    Undef(Vec<Spanned<IdentRef>>),
     /// `.0 if .1`
-    IfMod(Box<Statement>, Expression),
+    IfMod(Box<Spanned<Statement>>, Spanned<Expression>),
     /// `.0 unless .1`
-    UnlessMod(Box<Statement>, Expression),
+    UnlessMod(Box<Spanned<Statement>>, Spanned<Expression>),
     /// `.0 while .1`
-    WhileMod(Box<Statement>, Expression),
+    WhileMod(Box<Spanned<Statement>>, Spanned<Expression>),
     /// `.0 until .1`
-    UntilMod(Box<Statement>, Expression),
+    UntilMod(Box<Spanned<Statement>>, Spanned<Expression>),
     /// `.0 rescue .1`
-    RescueMod(Box<Statement>, Box<Statement>),
+    RescueMod(Box<Spanned<Statement>>, Box<Spanned<Statement>>),
     /// `.0 = .1`
-    AssignVar(Ident, Expression),
+    AssignVar(Spanned<Ident>, Spanned<Expression>),
     /// `member::name = value`
     ///
     /// if member is None, then it’s `::name`
     AssignConst {
-        member: Option<Expression>,
-        name: Ident,
-        value: Expression,
+        member: Option<Spanned<Expression>>,
+        name: Spanned<Ident>,
+        value: Spanned<Expression>,
     },
     /// `.0[.1] = .2`
-    AssignIndex(Expression, Arguments, Expression),
+    AssignIndex(Spanned<Expression>, Spanned<Arguments>, Spanned<Expression>),
     /// `.0..1 = .2`
-    AssignMethod(Expression, Ident, Expression),
+    AssignMethod(Spanned<Expression>, Spanned<Ident>, Spanned<Expression>),
     /// `member.name op value`
     AssignOp {
-        member: Option<Expression>,
-        name: Ident,
-        op: AssignmentOp,
-        value: Expression,
+        member: Option<Spanned<Expression>>,
+        name: Spanned<Ident>,
+        op: Spanned<AssignmentOp>,
+        value: Spanned<Expression>,
     },
     /// `member[index] op value`
     AssignIndexOp {
-        expr: Expression,
-        index: Arguments,
-        op: AssignmentOp,
-        value: Expression,
+        expr: Spanned<Expression>,
+        index: Spanned<Arguments>,
+        op: Spanned<AssignmentOp>,
+        value: Spanned<Expression>,
     },
     /// `.0 = .1`
-    MultiAssign(MultiLeftHandSide, MultiRightHandSide),
+    MultiAssign(Spanned<MultiLeftHandSide>, Spanned<MultiRightHandSide>),
 }
 
 /// A body statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BodyStatement {
-    pub body: StatementList,
-    pub rescue: Vec<Rescue>,
-    pub else_: Option<StatementList>,
-    pub ensure: Option<StatementList>,
+    pub body: Spanned<StatementList>,
+    pub rescue: Vec<Spanned<Rescue>>,
+    pub else_: Option<Spanned<StatementList>>,
+    pub ensure: Option<Spanned<StatementList>>,
 }
 
 /// A rescue clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Rescue {
     /// Exception class list
-    pub classes: Option<MultiRightHandSide>,
+    pub classes: Option<Spanned<MultiRightHandSide>>,
     /// => variable
-    pub variable: Option<LeftHandSide>,
-    pub body: StatementList,
+    pub variable: Spanned<Option<LeftHandSide>>,
+    pub body: Spanned<StatementList>,
 }
 
 /// When argument.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WhenArgument {
-    pub args: Vec<Expression>,
-    pub array: Option<Expression>,
+    pub args: Vec<Spanned<Expression>>,
+    pub array: Option<Spanned<Expression>>,
 }
 
 /// Definition path for classes and modules.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DefPath {
-    Member(Box<Expression>, Ident),
-    Root(Ident),
-    Current(Ident),
+    Member(Box<Spanned<Expression>>, Spanned<Ident>),
+    Root(Spanned<Ident>),
+    Current(Spanned<Ident>),
 }
 
 /// The value of a numeric literal.
@@ -383,197 +417,197 @@ pub enum Literal {
 /// Expressions.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expression {
-    Variable(Ident),
+    Variable(Spanned<Ident>),
     /// `::.0`
-    RootConst(Ident),
+    RootConst(Spanned<Ident>),
     /// `.0..1` or `.0::.1`
-    SubConst(Box<Expression>, Ident),
-    Literal(Literal),
-    Block(Block),
-    Nil,
-    True,
-    False,
-    SelfExpr,
+    SubConst(Box<Spanned<Expression>>, Spanned<Ident>),
+    Literal(Spanned<Literal>),
+    Block(Spanned<Block>),
+    Nil(Spanned<()>),
+    True(Spanned<()>),
+    False(Spanned<()>),
+    SelfExpr(Spanned<()>),
     /// `[.0]`
     ArrayConstructor(Option<Arguments>),
     /// `{.0}`
-    HashConstructor(Vec<(Expression, Expression)>),
+    HashConstructor(Vec<(Spanned<Expression>, Spanned<Expression>)>),
     /// `not .0`
-    Not(Box<Expression>),
+    Not(Box<Spanned<Expression>>),
     /// `-.0`
-    UMinus(Box<Expression>),
+    UMinus(Box<Spanned<Expression>>),
     /// `+.0`
-    UPlus(Box<Expression>),
+    UPlus(Box<Spanned<Expression>>),
     /// `~.0`
-    BitInv(Box<Expression>),
+    BitInv(Box<Spanned<Expression>>),
     /// `.0 .1 .2`
-    BinOp(Box<Expression>, BinaryOp, Box<Expression>),
+    BinOp(Box<Spanned<Expression>>, Spanned<BinaryOp>, Box<Spanned<Expression>>),
     /// `if cond; then; elsif; else end`
     If {
-        cond: Box<Expression>,
-        then: StatementList,
-        elsif: Vec<(Expression, StatementList)>,
-        else_: Option<StatementList>,
+        cond: Box<Spanned<Expression>>,
+        then: Spanned<StatementList>,
+        elsif: Vec<Spanned<(Spanned<Expression>, Spanned<StatementList>)>>,
+        else_: Option<Spanned<StatementList>>,
     },
     /// `cond ? then : else`
     Ternary {
-        cond: Box<Expression>,
-        then: Box<Expression>,
-        else_: Box<Expression>,
+        cond: Box<Spanned<Expression>>,
+        then: Box<Spanned<Expression>>,
+        else_: Box<Spanned<Expression>>,
     },
     /// `unless cond; then; else end`
     Unless {
-        cond: Box<Expression>,
-        then: StatementList,
-        else_: Option<StatementList>,
+        cond: Box<Spanned<Expression>>,
+        then: Spanned<StatementList>,
+        else_: Option<Spanned<StatementList>>,
     },
     /// `case expr; cases; else end`
     Case {
-        expr: Option<Box<Expression>>,
-        cases: Vec<(WhenArgument, StatementList)>,
-        else_: Option<StatementList>,
+        expr: Option<Box<Spanned<Expression>>>,
+        cases: Vec<(Spanned<WhenArgument>, Spanned<StatementList>)>,
+        else_: Option<Spanned<StatementList>>,
     },
     /// `while .0; .1 end`
-    While(Box<Expression>, StatementList),
+    While(Box<Spanned<Expression>>, Spanned<StatementList>),
     /// `until .0; .1 end`
-    Until(Box<Expression>, StatementList),
+    Until(Box<Spanned<Expression>>, Spanned<StatementList>),
     /// `for .0 in .1; .2 end`
-    For(MultiLeftHandSide, Box<Expression>, StatementList),
-    Begin(BodyStatement),
+    For(Spanned<MultiLeftHandSide>, Box<Spanned<Expression>>, Spanned<StatementList>),
+    Begin(Spanned<BodyStatement>),
     /// `member.name(args)`
     Call {
-        member: Option<Box<Expression>>,
-        name: Ident,
-        args: Arguments,
+        member: Option<Box<Spanned<Expression>>>,
+        name: Spanned<Ident>,
+        args: Spanned<Arguments>,
     },
     /// `.0[.1]`
-    Index(Box<Expression>, Arguments),
+    Index(Box<Spanned<Expression>>, Spanned<Arguments>),
     /// `defined? .0`
-    Defined(Box<Expression>),
+    Defined(Box<Spanned<Expression>>),
     /// `super(.0)`
-    Super(Arguments),
+    Super(Spanned<Arguments>),
     /// `return .0`
-    Return(Option<Arguments>),
+    Return(Option<Spanned<Arguments>>),
     /// `break .0`
-    Break(Option<Arguments>),
+    Break(Option<Spanned<Arguments>>),
     /// `yield .0`
-    Yield(Option<Arguments>),
+    Yield(Option<Spanned<Arguments>>),
     /// `next .0`
-    Next(Option<Arguments>),
+    Next(Option<Spanned<Arguments>>),
     Redo,
     Retry,
     /// `(.0)`
-    Statements(StatementList),
+    Statements(Spanned<StatementList>),
     /// `.0...1` or `.0....1`
     Range {
-        start: Option<Box<Expression>>,
-        end: Option<Box<Expression>>,
+        start: Option<Box<Spanned<Expression>>>,
+        end: Option<Box<Spanned<Expression>>>,
         inclusive: bool,
     },
     /// `module path; body end`
     Module {
-        path: DefPath,
-        body: BodyStatement,
+        path: Spanned<DefPath>,
+        body: Spanned<BodyStatement>,
     },
     /// `class path < superclass; body end`
     Class {
-        path: DefPath,
-        superclass: Option<Box<Expression>>,
-        body: BodyStatement,
+        path: Spanned<DefPath>,
+        superclass: Option<Box<Spanned<Expression>>>,
+        body: Spanned<BodyStatement>,
     },
     /// `def name params; body end`
     Method {
-        name: Ident,
-        params: Parameters,
-        body: BodyStatement,
+        name: Spanned<Ident>,
+        params: Spanned<Parameters>,
+        body: Spanned<BodyStatement>,
     },
     /// `class << expr; body end`
     SingletonClass {
-        expr: Box<Expression>,
-        body: BodyStatement,
+        expr: Box<Spanned<Expression>>,
+        body: Spanned<BodyStatement>,
     },
     /// `def expr.name params; body end`
     SingletonMethod {
-        expr: Box<Expression>,
-        name: Ident,
-        params: Parameters,
-        body: BodyStatement,
+        expr: Box<Spanned<Expression>>,
+        name: Spanned<Ident>,
+        params: Spanned<Parameters>,
+        body: Spanned<BodyStatement>,
     },
     /// `.0 = .1`
-    AssignVar(Ident, Box<Expression>),
+    AssignVar(Spanned<Ident>, Box<Spanned<Expression>>),
     /// `member::name = value`
     ///
     /// if member is None, then it’s `::name`
     AssignConst {
-        member: Option<Box<Expression>>,
-        name: Ident,
-        value: Box<Expression>,
+        member: Option<Box<Spanned<Expression>>>,
+        name: Spanned<Ident>,
+        value: Box<Spanned<Expression>>,
     },
     /// `.0[.1] = .2`
-    AssignIndex(Box<Expression>, Arguments, Box<Expression>),
+    AssignIndex(Box<Spanned<Expression>>, Spanned<Arguments>, Box<Spanned<Expression>>),
     /// `.0..1 = .2`
-    AssignMethod(Box<Expression>, Ident, Box<Expression>),
+    AssignMethod(Box<Spanned<Expression>>, Spanned<Ident>, Box<Spanned<Expression>>),
     /// `member.name op value`
     AssignOp {
-        member: Option<Box<Expression>>,
-        name: Ident,
-        op: AssignmentOp,
-        value: Box<Expression>,
+        member: Option<Box<Spanned<Expression>>>,
+        name: Spanned<Ident>,
+        op: Spanned<AssignmentOp>,
+        value: Box<Spanned<Expression>>,
     },
     /// `expr[index] op value`
     AssignIndexOp {
-        expr: Box<Expression>,
-        index: Arguments,
-        op: AssignmentOp,
-        value: Box<Expression>,
+        expr: Box<Spanned<Expression>>,
+        index: Spanned<Arguments>,
+        op: Spanned<AssignmentOp>,
+        value: Box<Spanned<Expression>>,
     },
     /// `.0 = .1 rescue .2`
-    AssignRescue(Box<LeftHandSide>, Box<Expression>, Box<Expression>),
+    AssignRescue(Box<LeftHandSide>, Box<Spanned<Expression>>, Box<Spanned<Expression>>),
 }
 
 /// Left hand side in a variable assignment.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LeftHandSide {
-    Var(Ident),
-    Index(Expression, Option<Arguments>),
-    Member(Expression, Ident),
-    RootConst(Ident),
+    Var(Spanned<Ident>),
+    Index(Spanned<Expression>, Option<Arguments>),
+    Member(Spanned<Expression>, Spanned<Ident>),
+    RootConst(Spanned<Ident>),
 }
 
 /// Left hand side in a multiple assignment statement.
-pub type MultiLeftHandSide = Vec<MultiLHSItem>;
+pub type MultiLeftHandSide = Vec<Spanned<MultiLHSItem>>;
 
 /// A left hand side item in a multiple assignment statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MultiLHSItem {
-    LHS(LeftHandSide),
+    LHS(Spanned<LeftHandSide>),
     /// `*.0`
-    Packing(Option<LeftHandSide>),
+    Packing(Spanned<Option<LeftHandSide>>),
     /// `(.0)`
-    Group(MultiLeftHandSide),
+    Group(Spanned<MultiLeftHandSide>),
 }
 
 /// Right hand side in a multiple assignment statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MultiRightHandSide {
-    pub items: Vec<Expression>,
-    pub splat: Option<Expression>,
+    pub items: Vec<Spanned<Expression>>,
+    pub splat: Option<Spanned<Expression>>,
 }
 
 /// A block or lambda.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Block {
-    pub params: Parameters,
-    pub body: StatementList,
+    pub params: Spanned<Parameters>,
+    pub body: Spanned<StatementList>,
     pub lambda: bool,
 }
 
 /// Method or indexing arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Arguments {
-    pub items: Vec<Argument>,
-    pub hash: Vec<(Expression, Expression)>,
-    pub block: Option<Box<Expression>>,
+    pub items: Vec<Spanned<Argument>>,
+    pub hash: Vec<Spanned<(Expression, Expression)>>,
+    pub block: Option<Box<Spanned<Expression>>>,
 }
 
 impl Arguments {
@@ -586,20 +620,20 @@ impl Arguments {
 /// A positional argument.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Argument {
-    Expr(Expression),
-    Splat(Expression),
+    Expr(Spanned<Expression>),
+    Splat(Spanned<Expression>),
 }
 
 // TODO: enforce order; these do actually have one
 /// A list of method parameters.
-pub type Parameters = Vec<Parameter>;
+pub type Parameters = Vec<Spanned<Parameter>>;
 
 /// Method parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Parameter {
-    Mandatory(Ident),
-    Optional(Ident, Expression),
-    Keyword(Ident, Option<Expression>),
-    Block(Ident),
-    Splat(Option<Ident>),
+    Mandatory(Spanned<Ident>),
+    Optional(Spanned<Ident>, Spanned<Expression>),
+    Keyword(Spanned<Ident>, Option<Spanned<Expression>>),
+    Block(Spanned<Ident>),
+    Splat(Spanned<Option<Ident>>),
 }

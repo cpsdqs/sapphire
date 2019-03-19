@@ -70,12 +70,12 @@ impl<'input> Cursor<'input> {
 }
 
 impl<'input> Iterator for Cursor<'input> {
-    type Item = &'input Token<'input>;
+    type Item = Spanned<&'input Token<'input>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.pos += 1;
         match self.buffer.get(self.pos - 1) {
-            Some(Ok((_, token, _))) => Some(token),
+            Some(Ok((_, token, _))) => Some(Spanned(token, Span(self.pos - 1, self.pos))),
             _ => None,
         }
     }
@@ -260,7 +260,7 @@ macro_rules! token {
     ($i:expr, $token_type:ident) => {{
         let mut i = $i.clone();
         let item = i.next();
-        match item.map(TokenType::from) {
+        match item.map(|item| item.0.into()) {
             Some(TokenType::$token_type) => Ok((i, item.unwrap())),
             _ => Err(ParseError::Unexpected(
                 $i.without_state(),
@@ -271,7 +271,7 @@ macro_rules! token {
     ($i:expr, $($tokens:ident,)+) => {{
         let mut i = $i.clone();
         let item = i.next();
-        match item.map(TokenType::from) {
+        match item.map(|item| item.0.into()) {
             $(Some(TokenType::$tokens) => Ok((i, item.unwrap())),)+
             _ => Err(ParseError::Unexpected(
                 $i.without_state(),
@@ -284,9 +284,10 @@ macro_rules! token {
 macro_rules! opt {
     ($i:expr, $submac:ident!($($args:tt)*)) => {{
         let i = $i.clone();
+        let start_pos = i.pos();
         match $submac!(i, $($args)*) {
-            Ok((i, o)) => Ok((i, Some(o))),
-            Err(_) => Ok(($i, None)),
+            Ok((i, o)) => Ok((i, Spanned(Some(o), Span(start_pos, i.pos())))),
+            Err(_) => Ok(($i, Spanned(None, Span(start_pos, start_pos)))),
         }
     }};
     ($i:expr, $f:expr) => (opt!($i, call!($f)));
@@ -411,17 +412,19 @@ macro_rules! tail_rules {
         $(tail_rule!($($targs:tt)*),)+;
         err: $err:ident
     ) => {{
+        let start_pos = $i.pos();
         match $submac!($i, $($args)*) {
-            Ok((mut i, mut $accum)) => {
+            Ok((mut i, $accum)) => {
+                let mut $accum = Spanned($accum, Span(start_pos, i.pos()));
                 loop {
                     let j = i.clone();
                     match alt!(j, $(tail_rule!($($targs)*),)+ err: $err) {
                         Ok((j, r)) => {
                             i = j;
-                            $accum = r;
+                            $accum = Spanned(r, Span(($accum.1).0, i.pos()));
                         }
                         Err(_) => {
-                            break Ok((i, $accum));
+                            break Ok((i, $accum.0));
                         }
                     }
                 }
@@ -552,7 +555,7 @@ sapphire_parser_gen::parser! {
             Kwhen,
             Kwhile,
             Kyield,
-        ) => t
+        ) => (t.0)
     }
 
     operator_method_name: (&Token) = {
@@ -581,7 +584,7 @@ sapphire_parser_gen::parser! {
             OBitInv,
             OAssignIndex,
             OIndex,
-        ) => t
+        ) => (t.0)
     }
 
     assignment_operator: (&Token) = {
@@ -599,13 +602,13 @@ sapphire_parser_gen::parser! {
             OAssignDiv,
             OAssignRem,
             OAssignPow,
-        ) => t
+        ) => (t.0)
     }
 
     literal: Expression = {
         t: token!(LNum, LStr, LHereDoc, LExecCmd, LArray, LRegExp, LSymbol,)
             => [ i => {
-            let literal = match t {
+            let literal = match t.0 {
                 Token::LNum(num) => Ok(Literal::Number {
                     positive: num.sign == '+',
                     value: num.contents.clone().into(),
@@ -621,7 +624,7 @@ sapphire_parser_gen::parser! {
                     for item in q {
                         match item {
                             Quoted::Fragment(s) => items.push(QuotedFragment::String(s.to_string())),
-                            Quoted::Ident(t) => items.push(QuotedFragment::Ident(t.clone().into())),
+                            Quoted::Ident(t) => items.push(QuotedFragment::Ident(t.into())),
                             Quoted::Interpolated(tokens) => {
                                 items.push(QuotedFragment::Interpolated(parse(&tokens)?));
                             }
@@ -635,7 +638,8 @@ sapphire_parser_gen::parser! {
                 Token::LSymbol(s) => Ok(Literal::Symbol(s.to_string())),
                 _ => unreachable!(), // see token! call above
             };
-            literal.map(|l| (i, Expression::Literal(l)))
+            let span = Span(i.pos() - 1, i.pos());
+            literal.map(|l| (i, Expression::Literal(Spanned(l, span))))
         }],
     }
 
@@ -643,7 +647,7 @@ sapphire_parser_gen::parser! {
     compound_statement: StatementList = {
         // statement_list? separator_list?
         s: opt!(statement_list) opt!(separator_list) => {
-            s.unwrap_or_else(|| Vec::with_capacity(0))
+            (s.unwrap_or_default().0).0
         }
     }
 
@@ -657,7 +661,7 @@ sapphire_parser_gen::parser! {
     separator_list: () = {
         many1!(separator, err: Unexpected(Expected::Separator)) => ()
     }
-    separator: (&Token) = { t: token!(PSemicolon, Newlines,) => (t) }
+    separator: (&Token) = { t: token!(PSemicolon, Newlines,) => (t.0) }
 
     statement: Statement = {
         e: expression => (Statement::Expr(e)),
@@ -682,15 +686,15 @@ sapphire_parser_gen::parser! {
         e: expression ws t: token!(P2Dots, P3Dots,) wss b: opt!(expression) => {
             Expression::Range {
                 start: Some(Box::new(e)),
-                end: b.map(Box::new),
-                inclusive: t == &Token::P2Dots,
+                end: b.map(Box::new).0,
+                inclusive: t.0 == &Token::P2Dots,
             }
         },
         t: token!(P2Dots, P3Dots,) wss e: expression => {
             Expression::Range {
                 start: None,
                 end: Some(Box::new(e)),
-                inclusive: t == &Token::P2Dots,
+                inclusive: t.0 == &Token::P2Dots,
             }
         },
         a: expression ws t: token!(
@@ -699,40 +703,40 @@ sapphire_parser_gen::parser! {
         ) wss b: expression => {
             #[derive(Debug)]
             enum Item {
-                Expr(Expression),
-                Op(BinaryOp),
+                Expr(Spanned<Expression>),
+                Op(Spanned<BinaryOp>),
             }
-            fn flatten_expr(expr: Expression) -> Vec<Item> {
-                match expr {
+            fn flatten_expr(expr: Spanned<Expression>) -> Vec<Item> {
+                match expr.0 {
                     Expression::BinOp(a, op, b) => {
                         flatten_expr(*a).into_iter()
                             .chain(iter::once(Item::Op(op)))
                             .chain(flatten_expr(*b).into_iter())
                             .collect()
                     }
-                    e => vec![Item::Expr(e)],
+                    _ => vec![Item::Expr(expr)],
                 }
             }
 
             let mut items: Vec<_> = flatten_expr(b);
             items.insert(0, Item::Expr(a));
-            items.insert(1, Item::Op(t.clone().into()));
+            items.insert(1, Item::Op(t.into()));
 
             for level in 0..=MAX_PREC_LEVEL {
                 let mut i = 0;
                 while i < items.len() {
                     match items[i] {
-                        Item::Op(op) if prec_level(op) == level => {
+                        Item::Op(op) if prec_level(op.0) == level => {
                             let prev = items.remove(i - 1);
                             i -= 1;
                             let next = items.remove(i + 1);
 
                             if let (Item::Expr(prev), Item::Expr(next)) = (prev, next) {
-                                items[i] = Item::Expr(Expression::BinOp(
-                                    Box::new(prev),
+                                items[i] = Item::Expr(Spanned(Expression::BinOp(
+                                    Box::new(Spanned(prev.0, prev.1)),
                                     op,
-                                    Box::new(next),
-                                ));
+                                    Box::new(Spanned(next.0, next.1)),
+                                ), Span((prev.1).0, (next.1).1)));
                                 i += 1;
                             } else {
                                 panic!("binary operation does not have expressions on either side");
@@ -745,18 +749,18 @@ sapphire_parser_gen::parser! {
 
             assert_eq!(items.len(), 1, "binary operation was not reduced to one expression");
             match items.remove(0) {
-                Item::Expr(e) => e,
+                Item::Expr(e) => e.0,
                 _ => panic!("binary operation was reduced to an operator somehow")
             }
         },
         e: expression ws t: token!(PDot, PDblColon,) wss i: method_name
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {
-            let mut args = a.unwrap_or_default();
-            if let Some(b) = b {
-                args.block = Some(Box::new(Expression::Block(b)));
+            let mut args = a.unwrap_or_default().0;
+            if let Spanned(Some(b), span) = b {
+                args.0.block = Some(Box::new(Spanned(Expression::Block(b), span)));
             }
-            if args.is_empty() && t == &Token::PDblColon && i.is_const() {
+            if args.0.is_empty() && t.0 == &Token::PDblColon && i.0.is_const() {
                 Expression::SubConst(Box::new(e), i)
             } else {
                 Expression::Call {
@@ -766,15 +770,15 @@ sapphire_parser_gen::parser! {
                 }
             }
         },
-        method_definition,
-        class_definition,
-        module_definition,
-        if_expression,
-        while_expression,
-        for_expression,
+        e: method_definition => (e.0),
+        e: class_definition => (e.0),
+        e: module_definition => (e.0),
+        e: if_expression => (e.0),
+        e: while_expression => (e.0),
+        e: for_expression => (e.0),
         e: expression ws token!(PLBracket) wss a: opt!(indexing_argument_list) wss
             token!(PRBracket) => {
-            Expression::Index(Box::new(e), a.unwrap_or_default())
+            Expression::Index(Box::new(e), a.unwrap_or_default().0)
         },
         i: variable ws token!(OAssign) wss e: expression => {
             Expression::AssignVar(i, Box::new(e))
@@ -794,11 +798,11 @@ sapphire_parser_gen::parser! {
             ); err: Expression)
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {
-            let mut args = a.unwrap_or_default();
-            if let Some(b) = b {
-                args.block = Some(Box::new(Expression::Block(b)));
+            let mut args = a.unwrap_or_default().0;
+            if let Spanned(Some(b), span) = b {
+                args.0.block = Some(Box::new(Spanned(Expression::Block(b), span)));
             }
-            match (args.is_empty(), &i) {
+            match (args.0.is_empty(), &i.0) {
                 (true, Ident::Local(_)) | (true, Ident::Const(_)) => {
                     Expression::Variable(i)
                 },
@@ -810,58 +814,60 @@ sapphire_parser_gen::parser! {
             }
         },
         not!(keyword; err: Expression) i: variable => (Expression::Variable(i)),
-        token!(Kself) => (Expression::SelfExpr),
-        token!(Ktrue) => (Expression::True),
-        token!(Kfalse) => (Expression::False),
-        token!(Knil) => (Expression::Nil),
+        t: token!(Kself) => (Expression::SelfExpr(Spanned((), t.1))),
+        t: token!(Ktrue) => (Expression::True(Spanned((), t.1))),
+        t: token!(Kfalse) => (Expression::False(Spanned((), t.1))),
+        t: token!(Knil) => (Expression::Nil(Spanned((), t.1))),
         token!(PDblColon) wss i: token!(IConstant) ws token!(OAssign) wss e: expression => {
             Expression::AssignConst {
                 member: None,
-                name: i.clone().into(),
+                name: i.into(),
                 value: Box::new(e),
             }
         },
-        token!(PDblColon) wss i: token!(IConstant) => (Expression::RootConst(i.clone().into())),
-        literal,
+        token!(PDblColon) wss i: token!(IConstant) => (Expression::RootConst(i.into())),
+        e: literal => (e.0),
     }
 
     variable: Ident = {
-        t: token!(ILocal, IConstant, IGlobal, IClass, IInstance,) => (t.clone().into()),
+        t: token!(ILocal, IConstant, IGlobal, IClass, IInstance,) => (t.into()),
     }
 
     method_name: Ident = {
-        i: token!(ILocal, IConstant, IMethodOnly, IAssignmentLikeMethod,) => (i.clone().into()),
-        i: operator_method_name => (i.clone().into()),
+        i: token!(ILocal, IConstant, IMethodOnly, IAssignmentLikeMethod,) => (i.into()),
+        i: operator_method_name => (i.into()),
         token!(PLBracket) token!(PRBracket) o: opt!(token!(OAssign)) => {
-            if o.is_some() {
+            if o.0.is_some() {
                 Ident::Keyword("[]=")
             } else {
                 Ident::Keyword("[]")
             }
         },
-        i: keyword => (i.clone().into()),
+        i: keyword => (i.into()),
     }
 
     arguments_without_parens: Arguments = {
-        token!(PLParen) wss a: opt!(argument_list) wss token!(PLParen) => (a.unwrap_or_default()),
-        argument_list,
+        token!(PLParen) wss a: opt!(argument_list) wss token!(PLParen) => {
+            (a.unwrap_or_default().0).0
+        },
+        l: argument_list => (l.0),
     }
     argument_list: Arguments = {
         p: positional_argument_list
             h: opt!(do_parse!(ws >> token!(PComma) >> wss >> h: association_list >> (h)))
             b: opt!(do_parse!(ws >> token!(PComma) >> wss >> b: block_argument >> (b))) => {
             Arguments {
-                items: p,
-                hash: h.unwrap_or_default(),
-                block: b.map(Box::new),
+                items: p.0,
+                hash: (h.unwrap_or_default().0).0,
+                block: b.map(Box::new).0,
             }
         },
         h: association_list
             b: opt!(do_parse!(ws >> token!(PComma) >> wss >> b: block_argument >> (b))) => {
             Arguments {
                 items: Vec::with_capacity(0),
-                hash: h,
-                block: b.map(Box::new),
+                hash: h.0,
+                block: b.map(Box::new).0,
             }
         },
         b: block_argument => {
@@ -877,21 +883,21 @@ sapphire_parser_gen::parser! {
             h: opt!(do_parse!(ws >> token!(PComma) >> wss >> h: association_list >> (h)))
             opt!(do_parse!(ws >> token!(PComma) >> ())) => {
             Arguments {
-                items: p,
-                hash: h.unwrap_or_else(|| Vec::with_capacity(0)),
+                items: p.0,
+                hash: (h.unwrap_or_default().0).0,
                 block: None,
             }
         },
         h: association_list opt!(do_parse!(ws >> token!(PComma) >> ())) => {
             Arguments {
                 items: Vec::with_capacity(0),
-                hash: h,
+                hash: h.0,
                 block: None,
             }
         },
     }
-    block_argument: Expression = { token!(OBitAnd) wss e: expression => e }
-    positional_argument_list: (Vec<Argument>) = {
+    block_argument: Expression = { token!(OBitAnd) wss e: expression => (e.0) }
+    positional_argument_list: (Vec<Spanned<Argument>>) = {
         a: positional_argument
             b: many0!(do_parse!(ws >> token!(PComma) >> wss >> a: positional_argument >> (a))) => {
             iter::once(a).chain(b.into_iter()).collect()
@@ -901,7 +907,7 @@ sapphire_parser_gen::parser! {
         token!(OMul) wss s: expression => (Argument::Splat(s)),
         not!(association; err: PositionalArgument) a: expression => (Argument::Expr(a)),
     }
-    association_list: (Vec<(Expression, Expression)>) = {
+    association_list: (Vec<Spanned<(Expression, Expression)>>) = {
         a: association
             b: many0!(do_parse!(ws >> token!(PComma) >> wss >> a: association >> (a))) => {
             iter::once(a).chain(b.into_iter()).collect()
@@ -909,24 +915,24 @@ sapphire_parser_gen::parser! {
     }
     association: (Expression, Expression) = {
         k: token!(ILocal) ws token!(PColon) wss v: expression => {
-            (Expression::Literal(Literal::Symbol(match k {
+            (Expression::Literal(Spanned(Literal::Symbol(match k.0 {
                 Token::ILocal(name) => name.to_string(),
                 _ => unreachable!(),
-            })), v)
+            }), k.1)), v.0)
         },
-        k: expression ws token!(PFatArrow) wss v: expression => ((k, v)),
+        k: expression ws token!(PFatArrow) wss v: expression => ((k.0, v.0)),
     }
 
     block: Block = {
-        brace_block,
-        do_block,
-        lambda,
+        b: brace_block => (b.0),
+        b: do_block => (b.0),
+        b: lambda => (b.0),
     }
     brace_block: Block = {
         token!(PLBrace) wss p: opt!(block_parameter_list) wss
             b: compound_statement wss token!(PRBrace) => {
             Block {
-                params: p.unwrap_or_default(),
+                params: p.unwrap_or_default().0,
                 body: b,
                 lambda: false,
             }
@@ -936,7 +942,7 @@ sapphire_parser_gen::parser! {
         token!(Kdo) wss p: opt!(block_parameter_list) wss
             b: compound_statement wss token!(Kend) => {
             Block {
-                params: p.unwrap_or_default(),
+                params: p.unwrap_or_default().0,
                 body: b,
                 lambda: false,
             }
@@ -946,7 +952,7 @@ sapphire_parser_gen::parser! {
         token!(PArrow) p: opt!(do_parse!(wss >> p: lambda_parameter >> (p))) ws token!(PLBrace)
             wss b: compound_statement wss token!(PRBrace) => {
             Block {
-                params: p.unwrap_or_default(),
+                params: p.unwrap_or_default().0,
                 body: b,
                 lambda: true,
             }
@@ -954,18 +960,22 @@ sapphire_parser_gen::parser! {
         token!(PArrow) p: opt!(do_parse!(wss >> p: lambda_parameter >> (p))) ws token!(Kdo)
             wss b: compound_statement wss token!(Kend) => {
             Block {
-                params: p.unwrap_or_default(),
+                params: p.unwrap_or_default().0,
                 body: b,
                 lambda: true,
             }
         },
     }
     lambda_parameter: Parameters = {
-        token!(PLParen) wss p: opt!(parameter_list) wss token!(PRParen) => (p.unwrap_or_default()),
-        parameter_list,
+        token!(PLParen) wss p: opt!(parameter_list) wss token!(PRParen) => {
+            (p.unwrap_or_default().0).0
+        },
+        p: parameter_list => (p.0),
     }
     block_parameter_list: Parameters = {
-        token!(OBitOr) wss p: opt!(parameter_list) wss token!(OBitOr) => (p.unwrap_or_default()),
+        token!(OBitOr) wss p: opt!(parameter_list) wss token!(OBitOr) => {
+            (p.unwrap_or_default().0).0
+        },
     }
 
     parameter_list: Parameters = {
@@ -977,11 +987,11 @@ sapphire_parser_gen::parser! {
         i: token!(ILocal) a: opt!(do_parse!(
             ws >> a: alt!(
                 do_parse!(token!(OAssign) >> wss >> e: expression >> ((true, Some(e)))),
-                do_parse!(token!(PColon) >> wss >> e: opt!(expression) >> ((false, e))),
+                do_parse!(token!(PColon) >> wss >> e: opt!(expression) >> ((false, e.0))),
                 err: Parameter
             ) >> (a)
         )) => {
-            match a {
+            match a.0 {
                 Some((true, Some(e))) => Parameter::Optional(i.clone().into(), e),
                 Some((true, None)) => unreachable!(),
                 Some((false, e)) => Parameter::Keyword(i.clone().into(), e),
@@ -995,26 +1005,26 @@ sapphire_parser_gen::parser! {
             wss r: many0!(rescue_clause)
             wss e: opt!(else_clause)
             wss f: opt!(ensure_clause) => [i => {
-            if e.is_some() && r.is_empty() {
+            if e.0.is_some() && r.is_empty() {
                 Err(ParseError::Unexpected(i.without_state(), Expected::RescueClause))
             } else {
                 Ok((i, BodyStatement {
                     body: b,
                     rescue: r,
-                    else_: e,
-                    ensure: f,
+                    else_: e.0,
+                    ensure: f.0,
                 }))
             }
         }]
     }
     then_clause: StatementList = {
-        opt!(separator) wss token!(Kthen) wss c: compound_statement => c,
-        separator wss c: compound_statement => c,
+        opt!(separator) wss token!(Kthen) wss c: compound_statement => (c.0),
+        separator wss c: compound_statement => (c.0),
     }
     else_clause: StatementList = {
-        token!(Kelse) wss c: compound_statement => c,
+        token!(Kelse) wss c: compound_statement => (c.0),
     }
-    elsif_clause: (Expression, StatementList) = {
+    elsif_clause: (Spanned<Expression>, Spanned<StatementList>) = {
         token!(Kelsif) wss c: expression ws b: then_clause => ((c, b)),
     }
     rescue_clause: Rescue = {
@@ -1023,7 +1033,7 @@ sapphire_parser_gen::parser! {
             wss v: opt!(variable) // TEMP
             ws t: then_clause => {
             Rescue {
-                classes: e,
+                classes: e.0,
                 variable: v.map(|v| LeftHandSide::Var(v)),
                 body: t,
             }
@@ -1039,7 +1049,7 @@ sapphire_parser_gen::parser! {
         }
     }
     ensure_clause: StatementList = {
-        token!(Kensure) wss c: compound_statement => c,
+        token!(Kensure) wss c: compound_statement => (c.0),
     }
 
     if_expression: Expression = {
@@ -1052,7 +1062,7 @@ sapphire_parser_gen::parser! {
                 cond: Box::new(c),
                 then: t,
                 elsif: p,
-                else_: e,
+                else_: e.0,
             }
         }
     }
@@ -1065,8 +1075,8 @@ sapphire_parser_gen::parser! {
         }
     }
     do_clause: StatementList = {
-        token!(Kdo) ws opt!(separator) wss c: compound_statement => c,
-        separator wss c: compound_statement => c,
+        token!(Kdo) ws opt!(separator) wss c: compound_statement => (c.0),
+        separator wss c: compound_statement => (c.0),
     }
 
     for_expression: Expression = {
@@ -1075,7 +1085,16 @@ sapphire_parser_gen::parser! {
             wss e: expression
             ws b: do_clause
             wss token!(Kend) => {
-            Expression::For(vec![MultiLHSItem::LHS(LeftHandSide::Var(v))], Box::new(e), b)
+            Expression::For(
+                Spanned(vec![
+                    Spanned(
+                        MultiLHSItem::LHS(Spanned(LeftHandSide::Var(Spanned(v.0, v.1)), v.1)),
+                        v.1
+                    )
+                ], v.1),
+                Box::new(e),
+                b
+            )
         }
     }
 
@@ -1090,8 +1109,12 @@ sapphire_parser_gen::parser! {
         }
     }
     method_parameters: Parameters = {
-        token!(PLParen) wss p: opt!(parameter_list) wss token!(PRParen) => (p.unwrap_or_default()),
-        p: opt!(parameter_list) ws separator => (p.unwrap_or_default()),
+        token!(PLParen) wss p: opt!(parameter_list) wss token!(PRParen) => {
+            (p.unwrap_or_default().0).0
+        },
+        p: opt!(parameter_list) ws separator => {
+            (p.unwrap_or_default().0).0
+        },
     }
 
     class_definition: Expression = {
@@ -1104,7 +1127,7 @@ sapphire_parser_gen::parser! {
             wss token!(Kend) => {
             Expression::Class {
                 path: p,
-                superclass: s.map(Box::new),
+                superclass: s.map(Box::new).0,
                 body: b,
             }
         }
@@ -1112,7 +1135,7 @@ sapphire_parser_gen::parser! {
     const_def_path: DefPath = {
         token!(PDblColon) wss i: token!(IConstant) => (DefPath::Root(i.clone().into())),
         e: expression => [ i => {
-            match e {
+            match e.0 {
                 Expression::SubConst(member, name) => Ok((i, DefPath::Member(member, name))),
                 _ => Err(ParseError::Unexpected(i.without_state(), Expected::ConstDefPath))
             }
