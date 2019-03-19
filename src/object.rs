@@ -135,6 +135,7 @@ pub struct RbModule {
     methods: FnvHashMap<Symbol, Proc>,
     method_cache: FnvHashMap<Symbol, Proc>,
     class: Ref<Object>,
+    singleton_class: Option<Ref<Object>>,
     self_ref: Weak<Object>,
 }
 
@@ -151,6 +152,7 @@ impl RbModule {
             methods: FnvHashMap::default(),
             method_cache: FnvHashMap::default(),
             class,
+            singleton_class: None,
             self_ref: unsafe { mem::uninitialized() },
         });
         let this_ref = this.downgrade();
@@ -197,6 +199,18 @@ impl RbModule {
     pub fn def_method(&mut self, name: Symbol, method: Proc) {
         self.methods.insert(name, method);
     }
+
+    fn ensure_singleton_class(&mut self, context: &Context) {
+        if self.singleton_class.is_some() {
+            return;
+        }
+
+        self.singleton_class = Some(RbClass::new_singleton(
+            self.self_ref.clone(),
+            self.class.clone(),
+            context,
+        ));
+    }
 }
 
 impl Object for RbModule {
@@ -236,9 +250,13 @@ impl Object for RbModule {
                 }
                 _ => unimplemented!("raise ArgumentError"),
             },
+            Symbol::SINGLETON_CLASS => {
+                self.ensure_singleton_class(thread.context());
+                Ok(Value::Ref(self.singleton_class.as_ref().unwrap().clone()))
+            }
             name => send(
                 Value::Ref(self.self_ref.upgrade().unwrap()),
-                self.class.clone(),
+                self.singleton_class.as_ref().unwrap_or(&self.class).clone(),
                 name,
                 args,
                 thread,
@@ -272,6 +290,7 @@ pub struct RbClass {
     methods: FnvHashMap<Symbol, Proc>,
     method_cache: FnvHashMap<Symbol, Proc>,
     class: Ref<Object>,
+    singleton_class: Option<Ref<Object>>,
     superclass: Ref<Object>,
     self_ref: Weak<Object>,
 }
@@ -305,6 +324,7 @@ impl RbClass {
             methods: FnvHashMap::default(),
             method_cache: FnvHashMap::default(),
             class,
+            singleton_class: None,
             superclass,
             self_ref: unsafe { mem::uninitialized() },
         });
@@ -374,6 +394,18 @@ impl RbClass {
         // (possibly because superclass.as_ptr() returns a fat pointer)
         self.superclass.as_ptr() as *const () == self as *const _ as *const ()
     }
+
+    fn ensure_singleton_class(&mut self, context: &Context) {
+        if self.singleton_class.is_some() {
+            return;
+        }
+
+        self.singleton_class = Some(RbClass::new_singleton(
+            self.self_ref.clone(),
+            self.class.clone(),
+            context,
+        ));
+    }
 }
 
 impl Object for RbClass {
@@ -419,9 +451,13 @@ impl Object for RbClass {
                 _ => unimplemented!("raise ArgumentError"),
             },
             Symbol::SUPERCLASS => Ok(Value::Ref(self.superclass.clone())),
+            Symbol::SINGLETON_CLASS => {
+                self.ensure_singleton_class(thread.context());
+                Ok(Value::Ref(self.singleton_class.as_ref().unwrap().clone()))
+            }
             name => send(
                 Value::Ref(self.self_ref.upgrade().unwrap()),
-                self.class.clone(),
+                self.singleton_class.as_ref().unwrap_or(&self.class).clone(),
                 name,
                 args,
                 thread,
@@ -587,6 +623,7 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         methods: FnvHashMap::default(),
         method_cache: FnvHashMap::default(),
         class: unsafe { mem::uninitialized() },
+        singleton_class: None,
         superclass: unsafe { mem::uninitialized() },
         self_ref: unsafe { mem::uninitialized() },
     });
@@ -597,6 +634,7 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         methods: FnvHashMap::default(),
         method_cache: FnvHashMap::default(),
         class: unsafe { mem::uninitialized() },
+        singleton_class: None,
         superclass: object_class.clone(),
         self_ref: unsafe { mem::uninitialized() },
     });
@@ -607,6 +645,7 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         methods: FnvHashMap::default(),
         method_cache: FnvHashMap::default(),
         class: unsafe { mem::uninitialized() },
+        singleton_class: None,
         superclass: module_class.clone(),
         self_ref: unsafe { mem::uninitialized() },
     });
