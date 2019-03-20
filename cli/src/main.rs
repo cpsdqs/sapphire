@@ -1,17 +1,18 @@
-use std::process::exit;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use sapphire::compiler::{compile, compile_ir};
 use sapphire::compiler::parser::lex::Lexer;
 use sapphire::compiler::parser::parse::parse;
+use sapphire::compiler::{compile, compile_ir};
 use sapphire::context::Context;
 use sapphire::object::{Arguments, Object, SendError};
 use sapphire::proc::Proc;
 use sapphire::thread::Thread;
 use sapphire::value::Value;
+use std::io::{self, Read};
+use std::mem;
+use std::process::exit;
 use std::sync::Arc;
 use std::time::Instant;
-use std::io::{self, Read};
 
 fn main() {
     if atty::is(atty::Stream::Stdin) {
@@ -23,28 +24,43 @@ fn main() {
         let mut time = true;
 
         let context = Arc::new(Context::new());
+        let mut line_accum = String::new();
+        let mut multiline_mode = false;
 
         loop {
-            let mut prompt = String::from("\x1b[38;5;248msapphire (");
-            if ast {
-                prompt.push('a');
+            let mut prompt = String::new();
+            if multiline_mode {
+                prompt += "\x1b[38;5;248m.. \x1b[m";
+            } else {
+                prompt += "\x1b[38;5;248msapphire (";
+                if ast {
+                    prompt.push('a');
+                }
+                if ir {
+                    prompt.push('i');
+                }
+                if byte {
+                    prompt.push('b');
+                }
+                if exec {
+                    prompt.push('e');
+                }
+                if time {
+                    prompt.push('t');
+                }
+                prompt.push_str(")> \x1b[m");
             }
-            if ir {
-                prompt.push('i');
-            }
-            if byte {
-                prompt.push('b');
-            }
-            if exec {
-                prompt.push('e');
-            }
-            if time {
-                prompt.push('t');
-            }
-            prompt.push_str(")> \x1b[m");
 
             match rl.readline(&prompt) {
-                Ok(line) => {
+                Ok(mut line) => {
+                    if line == "." && !multiline_mode {
+                        multiline_mode = true;
+                        continue;
+                    } else if line == "." {
+                        multiline_mode = false;
+                        line = mem::replace(&mut line_accum, String::new());
+                    }
+
                     rl.add_history_entry(line.as_ref());
 
                     match &*line {
@@ -69,6 +85,12 @@ fn main() {
                             print_enabled_disabled(time, "Time");
                         }
                         _ => {
+                            if multiline_mode {
+                                line_accum += &line;
+                                line_accum += "\n";
+                                continue;
+                            }
+
                             if ast {
                                 let tokens: Vec<_> = Lexer::new(&line).collect();
                                 match parse(&tokens) {
@@ -148,7 +170,7 @@ fn main() {
                 SendError::Thread(err) => {
                     eprintln!("Thread error: {:?}", err);
                 }
-            }
+            },
         }
     }
 }
