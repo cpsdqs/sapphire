@@ -92,13 +92,37 @@ impl<'a> Arguments<'a> {
 
 #[macro_export]
 macro_rules! read_args {
-    ($args:expr, $thread:expr; $($rest:ident)*) => {
+    ($args:expr, $thread:expr; -) => {
+        read_args!(__impl $args, $thread, 0;)
+    };
+    ($args:expr, $thread:expr; $($rest:tt)*) => {
         read_args!(__impl $args, $thread, 0; $($rest)*)
     };
-    ($args:expr, $thread:expr; -) => {
-        read_args!(__impl $args, $thread, 0 => __end)
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident: $ty:ident, $($rest:tt)*) => {
+        let $var = match $args.args.next() {
+            Some(Value::$ty(arg)) => arg,
+            Some(value) => {
+                return Err(SendError::Exception(Value::Ref(Exception::new(
+                    format!(
+                        "Expected a {}, got {}",
+                        stringify!($ty),
+                        value.inspect($thread.context())
+                    ),
+                    $thread.trace(),
+                    $thread.context().exceptions().argument_error.clone(),
+                ))));
+            }
+            None => {
+                return Err(SendError::Exception(Value::Ref(Exception::new(
+                    format!("Expected an argument for {}", stringify!($var)),
+                    $thread.trace(),
+                    $thread.context().exceptions().argument_error.clone(),
+                ))));
+            }
+        };
+        read_args!(__impl $args, $thread, $c + 1; $($rest)*);
     };
-    (__impl $args:expr, $thread:expr, $c:expr; $var:ident) => {
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident, $($rest:tt)*) => {
         let $var = match $args.args.next() {
             Some(arg) => arg,
             None => {
@@ -109,12 +133,38 @@ macro_rules! read_args {
                 ))));
             }
         };
-        read_args!(__impl $args, $thread, $c => __end);
+        read_args!(__impl $args, $thread, $c + 1; $($rest)*);
     };
-    (__impl $args:expr, $thread:expr, $c:expr => __end) => {
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident: $ty:ident) => {
+        read_args!(__impl $args, $thread, $c; $var: $ty,);
+    };
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident) => {
+        read_args!(__impl $args, $thread, $c; $var,);
+    };
+    (__impl $args:expr, $thread:expr, $c:expr; &$block:ident) => {
+        let $block = match $args.block {
+            Some(Value::Proc(arg)) => arg,
+            Some(value) => {
+                return Err(SendError::Exception(Value::Ref(Exception::new(
+                    format!("Expected a block argument, got {}", value.inspect($thread.context())),
+                    $thread.trace(),
+                    $thread.context().exceptions().argument_error.clone(),
+                ))));
+            }
+            None => {
+                return Err(SendError::Exception(Value::Ref(Exception::new(
+                    format!("Expected a block argument"),
+                    $thread.trace(),
+                    $thread.context().exceptions().argument_error.clone(),
+                ))));
+            }
+        };
+        read_args!(__impl $args, $thread, $c;);
+    };
+    (__impl $args:expr, $thread:expr, $c:expr;) => {
         match $args.args.next() {
             Some(_) => return Err(SendError::Exception(Value::Ref(Exception::new(
-                match $c {
+                match $c - 1 {
                     0 => format!("Expected no arguments"),
                     1 => format!("Expected at most one argument"),
                     c => format!("Expected at most {} arguments", c),
@@ -228,29 +278,25 @@ impl Object for RbModule {
         thread: &mut Thread,
     ) -> Result<Value, SendError> {
         match name {
-            // TODO: proper argument validation
-            Symbol::METHOD => match args.args.next() {
-                Some(Value::Symbol(name)) => Ok(self
+            Symbol::METHOD => {
+                read_args!(args, thread; name: Symbol);
+                Ok(self
                     .method(name, thread)
                     .map(Value::Proc)
-                    .unwrap_or(Value::Nil)),
-                _ => unimplemented!("raise ArgumentError"),
-            },
-            Symbol::DEFINE_METHOD => match (args.args.next(), args.block) {
-                (Some(Value::Symbol(name)), Some(Value::Proc(proc))) => {
-                    self.def_method(name, proc);
-                    Ok(Value::Nil)
-                }
-                _ => unimplemented!("raise ArgumentError"),
-            },
-            Symbol::INCLUDE => match args.args.next() {
-                Some(Value::Ref(object)) => {
-                    self.modules.push(object);
-                    Ok(Value::Nil)
-                }
-                _ => unimplemented!("raise ArgumentError"),
-            },
+                    .unwrap_or(Value::Nil))
+            }
+            Symbol::DEFINE_METHOD => {
+                read_args!(args, thread; name: Symbol, &proc);
+                self.def_method(name, proc);
+                Ok(Value::Nil)
+            }
+            Symbol::INCLUDE => {
+                read_args!(args, thread; module: Ref);
+                self.modules.push(module);
+                Ok(Value::Nil)
+            }
             Symbol::SINGLETON_CLASS => {
+                read_args!(args, thread; -);
                 self.ensure_singleton_class(thread.context());
                 Ok(Value::Ref(self.singleton_class.as_ref().unwrap().clone()))
             }
@@ -395,6 +441,13 @@ impl RbClass {
         self.superclass.as_ptr() as *const () == self as *const _ as *const ()
     }
 
+    fn is_singleton_class(&self) -> bool {
+        match self.name {
+            ClassName::Singleton(_) => true,
+            _ => false,
+        }
+    }
+
     fn ensure_singleton_class(&mut self, context: &Context) {
         if self.singleton_class.is_some() {
             return;
@@ -423,35 +476,34 @@ impl Object for RbClass {
         thread: &mut Thread,
     ) -> Result<Value, SendError> {
         match name {
-            // TODO: proper argument validation
-            Symbol::NEW => {
+            Symbol::NEW if !self.is_singleton_class() => {
                 let object = RbObject::new(self.self_ref.upgrade().unwrap());
-                // TODO: initialize with args
+                object.get().send(Symbol::INITIALIZE, args, thread)?;
                 Ok(Value::Ref(object))
             }
-            Symbol::METHOD => match args.args.next() {
-                Some(Value::Symbol(name)) => Ok(self
+            Symbol::METHOD => {
+                read_args!(args, thread; name: Symbol);
+                Ok(self
                     .method(name, thread)
                     .map(Value::Proc)
-                    .unwrap_or(Value::Nil)),
-                _ => unimplemented!("raise ArgumentError"),
-            },
-            Symbol::DEFINE_METHOD => match (args.args.next(), args.block) {
-                (Some(Value::Symbol(name)), Some(Value::Proc(proc))) => {
-                    self.def_method(name, proc);
-                    Ok(Value::Nil)
-                }
-                _ => unimplemented!("raise ArgumentError"),
-            },
-            Symbol::INCLUDE => match args.args.next() {
-                Some(Value::Ref(object)) => {
-                    self.modules.push(object);
-                    Ok(Value::Nil)
-                }
-                _ => unimplemented!("raise ArgumentError"),
-            },
-            Symbol::SUPERCLASS => Ok(Value::Ref(self.superclass.clone())),
+                    .unwrap_or(Value::Nil))
+            }
+            Symbol::DEFINE_METHOD => {
+                read_args!(args, thread; name: Symbol, &proc);
+                self.def_method(name, proc);
+                Ok(Value::Nil)
+            }
+            Symbol::INCLUDE => {
+                read_args!(args, thread; module: Ref);
+                self.modules.push(module);
+                Ok(Value::Nil)
+            }
+            Symbol::SUPERCLASS => {
+                read_args!(args, thread; -);
+                Ok(Value::Ref(self.superclass.clone()))
+            }
             Symbol::SINGLETON_CLASS => {
+                read_args!(args, thread; -);
                 self.ensure_singleton_class(thread.context());
                 Ok(Value::Ref(self.singleton_class.as_ref().unwrap().clone()))
             }
@@ -685,6 +737,12 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
             class_class_ref.clone(),
         ));
         mem::forget(mem::replace(&mut class_class.class, class_class_ref));
+
+        fn init(_: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+            read_args!(args, thread; -);
+            Ok(Value::Nil)
+        }
+        object_class.def_method(Symbol::INITIALIZE, Proc::Native(init));
     }
 
     let object_class_ref = object_class.clone();

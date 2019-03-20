@@ -3,6 +3,7 @@
 use crate::context::Context;
 use crate::exception::Exception;
 use crate::object::{send, Arguments, Object, SendError};
+use crate::read_args;
 use crate::symbol::Symbol;
 use crate::thread::Thread;
 use crate::value::Value;
@@ -22,10 +23,22 @@ impl Object for i64 {
         thread: &mut Thread,
     ) -> Result<Value, SendError> {
         match name {
-            Symbol::CLASS => Ok(Value::Ref(thread.context().fixnum_class().clone())),
-            Symbol::UPLUS => Ok(Value::Fixnum(*self)),
-            Symbol::UMINUS => Ok(Value::Fixnum(-*self)),
-            Symbol::BIT_INV => Ok(Value::Fixnum(!*self)),
+            Symbol::CLASS => {
+                read_args!(args, thread; -);
+                Ok(Value::Ref(thread.context().fixnum_class().clone()))
+            },
+            Symbol::UPLUS => {
+                read_args!(args, thread; -);
+                Ok(Value::Fixnum(*self))
+            },
+            Symbol::UMINUS => {
+                read_args!(args, thread; -);
+                Ok(Value::Fixnum(-*self))
+            },
+            Symbol::BIT_INV => {
+                read_args!(args, thread; -);
+                Ok(Value::Fixnum(!*self))
+            },
             Symbol::ADD
             | Symbol::SUB
             | Symbol::MUL
@@ -42,9 +55,10 @@ impl Object for i64 {
             | Symbol::SHL
             | Symbol::SHR => {
                 // TODO: proper argument validation
-                match args.args.next() {
+                read_args!(args, thread; rhs);
+                match rhs {
                     // TODO: use checked operations
-                    Some(Value::Fixnum(rhs)) => match name {
+                    Value::Fixnum(rhs) => match name {
                         Symbol::ADD => Ok(Value::Fixnum(*self + rhs)),
                         Symbol::SUB => Ok(Value::Fixnum(*self - rhs)),
                         Symbol::MUL => Ok(Value::Fixnum(*self * rhs)),
@@ -72,7 +86,7 @@ impl Object for i64 {
                         Symbol::SHR => Ok(Value::Fixnum(*self >> rhs)),
                         _ => unreachable!(),
                     },
-                    Some(Value::Float(rhs)) => match name {
+                    Value::Float(rhs) => match name {
                         Symbol::ADD => Ok(Value::Float(*self as f64 + rhs)),
                         Symbol::SUB => Ok(Value::Float(*self as f64 - rhs)),
                         Symbol::MUL => Ok(Value::Float(*self as f64 * rhs)),
@@ -93,12 +107,14 @@ impl Object for i64 {
                     _ => unimplemented!("coerce"),
                 }
             }
-            Symbol::EQ => match args.args.next() {
-                Some(Value::Fixnum(rhs)) => Ok(Value::Bool(*self == rhs)),
-                Some(Value::Float(rhs)) => Ok(Value::Bool(*self as f64 == rhs)),
-                Some(_) => Ok(Value::Bool(false)),
-                _ => unimplemented!("argument error"),
-            },
+            Symbol::EQ => {
+                read_args!(args, thread; rhs);
+                match rhs {
+                    Value::Fixnum(rhs) => Ok(Value::Bool(*self == rhs)),
+                    Value::Float(rhs) => Ok(Value::Bool(*self as f64 == rhs)),
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
             _ => send(
                 Value::Fixnum(*self),
                 thread.context().fixnum_class().clone(),

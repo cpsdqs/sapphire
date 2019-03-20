@@ -368,7 +368,7 @@ pub enum Quoted<'input> {
 }
 
 named!(peek_nident<&str, ()>, alt_complete!(
-    do_parse!(not!(alphanumeric1) >> not!(char!('_')) >> ())
+    do_parse!(not!(alphanumeric1) >> not!(one_of!("_!?")) >> ())
     | do_parse!(eof!() >> ())
 ));
 
