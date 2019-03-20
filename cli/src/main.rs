@@ -1,6 +1,7 @@
+use std::process::exit;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use sapphire::compiler::compile_ir;
+use sapphire::compiler::{compile, compile_ir};
 use sapphire::compiler::parser::lex::Lexer;
 use sapphire::compiler::parser::parse::parse;
 use sapphire::context::Context;
@@ -10,6 +11,7 @@ use sapphire::thread::Thread;
 use sapphire::value::Value;
 use std::sync::Arc;
 use std::time::Instant;
+use std::io::{self, Read};
 
 fn main() {
     if atty::is(atty::Stream::Stdin) {
@@ -125,7 +127,29 @@ fn main() {
             }
         }
     } else {
-        unimplemented!("read from stdin and execute")
+        let mut code = String::new();
+        io::stdin().read_to_string(&mut code).unwrap();
+
+        let context = Arc::new(Context::new());
+        let proc = match compile("main", code, &mut *context.symbols_mut()) {
+            Ok(proc) => Proc::Sapphire(Arc::new(proc)),
+            Err(err) => {
+                eprintln!("Failed to compile:\n{}", err.fmt_ansi());
+                exit(1);
+            }
+        };
+        let mut thread = Thread::new(Arc::clone(&context));
+        match thread.call(Value::Ref(context.root().clone()), proc, Arguments::empty()) {
+            Ok(_) => (),
+            Err(err) => match err {
+                SendError::Exception(exception) => {
+                    eprintln!("Exception: {}", exception.inspect(&context));
+                }
+                SendError::Thread(err) => {
+                    eprintln!("Thread error: {:?}", err);
+                }
+            }
+        }
     }
 }
 

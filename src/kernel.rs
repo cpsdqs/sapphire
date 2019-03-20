@@ -42,6 +42,7 @@ pub fn init(context: &Arc<Context>) {
         module.def_method(symbols.symbol("object_id"), Proc::Native(object_id));
         module.def_method(symbols.symbol("nil?"), Proc::Native(is_nil));
         module.def_method(symbols.symbol("kind_of?"), Proc::Native(is_a));
+        module.def_method(symbols.symbol("inspect"), Proc::Native(inspect));
     }
 }
 
@@ -141,4 +142,9 @@ fn method_missing(recv: Value, args: Arguments, thread: &mut Thread) -> Result<V
             thread.context().exceptions().type_error.clone(),
         )))),
     }
+}
+
+fn inspect(recv: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+    read_args!(args, thread; -);
+    Ok(Value::String(recv.inspect(thread.context())))
 }
