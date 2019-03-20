@@ -207,7 +207,6 @@ impl Thread {
         new_self: Value,
         args: &Arguments,
     ) -> Result<(), ThreadError> {
-        // TODO: push modules?
         let block_given = args.block.is_some();
         self.frames.push(Frame::new(proc, new_self, block_given))?;
         self.pcs.push(self.pc)?;
@@ -789,7 +788,12 @@ impl Thread {
             }
             module
         };
+        match module.clone() {
+            Value::Ref(module) => self.modules.push(module.clone())?,
+            _ => unimplemented!("exception"),
+        }
         self.call(module, Proc::Sapphire(proc), Arguments::empty())?;
+        self.modules.pop();
         Ok(None)
     }
     #[inline]
@@ -832,7 +836,12 @@ impl Thread {
             }
             module
         };
+        match module.clone() {
+            Value::Ref(module) => self.modules.push(module.clone())?,
+            _ => unimplemented!("exception"),
+        }
         self.call(module, Proc::Sapphire(proc), Arguments::empty())?;
+        self.modules.pop();
         Ok(None)
     }
     #[inline]
