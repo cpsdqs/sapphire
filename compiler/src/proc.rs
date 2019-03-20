@@ -292,14 +292,20 @@ pub enum ConstParam {
 
 impl ConstProc {
     pub fn new<T: SymbolTable, U>(&self, symbols: &mut T) -> Proc<T, U> {
+        self.new_with(&mut |sym| symbols.symbol(sym))
+    }
+    pub fn new_with<T: SymbolTable, U, F: FnMut(&str) -> T::Symbol>(
+        &self,
+        f: &mut F,
+    ) -> Proc<T, U> {
         Proc {
-            name: symbols.symbol(self.symbol_name(self.name)),
+            name: f(self.symbol_name(self.name)),
             registers: self.registers,
             block_idx: self.block_idx,
-            statics: self.statics.iter().map(|s| s.new(self, symbols)).collect(),
+            statics: self.statics.iter().map(|s| s.new(self, f)).collect(),
             mode: self.mode,
             code: self.code.to_vec(),
-            params: self.params.new(self, symbols),
+            params: self.params.new(self, f),
             parent_registers: Vec::new(),
         }
     }
@@ -310,24 +316,32 @@ impl ConstProc {
 }
 
 impl ConstStatic {
-    fn new<T: SymbolTable, U>(&self, proc: &ConstProc, symbols: &mut T) -> Static<T, U> {
+    fn new<T: SymbolTable, U, F: FnMut(&str) -> T::Symbol>(
+        &self,
+        proc: &ConstProc,
+        f: &mut F,
+    ) -> Static<T, U> {
         match self {
             ConstStatic::Int(i) => Static::Int(*i),
             ConstStatic::Float(i) => Static::Float(*i),
             ConstStatic::Str(i) => Static::Str(i.to_string()),
-            ConstStatic::Sym(i) => Static::Sym(symbols.symbol(proc.symbol_name(*i))),
-            ConstStatic::Proc(i) => Static::Proc(Arc::new(i.new(symbols))),
+            ConstStatic::Sym(i) => Static::Sym(f(proc.symbol_name(*i))),
+            ConstStatic::Proc(i) => Static::Proc(Arc::new(i.new_with(f))),
         }
     }
 }
 
 impl ConstParams {
-    fn new<T: SymbolTable>(&self, proc: &ConstProc, symbols: &mut T) -> Params<T> {
+    fn new<T: SymbolTable, F: FnMut(&str) -> T::Symbol>(
+        &self,
+        proc: &ConstProc,
+        f: &mut F,
+    ) -> Params<T> {
         Params {
             params: self
                 .params
                 .iter()
-                .map(|param| param.new(proc, symbols))
+                .map(|param| param.new::<T, F>(proc, f))
                 .collect(),
             block: self.block,
         }
@@ -335,14 +349,18 @@ impl ConstParams {
 }
 
 impl ConstParam {
-    fn new<T: SymbolTable>(&self, proc: &ConstProc, symbols: &mut T) -> Param<T::Symbol> {
+    fn new<T: SymbolTable, F: FnMut(&str) -> T::Symbol>(
+        &self,
+        proc: &ConstProc,
+        f: &mut F,
+    ) -> Param<T::Symbol> {
         match self {
             ConstParam::Mandatory(i) => Param::Mandatory(*i),
             ConstParam::Optional(i) => Param::Optional(*i),
             ConstParam::Splat(i) => Param::Splat(*i),
             ConstParam::Hash(hash) => Param::Hash(
                 hash.iter()
-                    .map(|(id, r, m)| (symbols.symbol(proc.symbol_name(*id)), *r, *m))
+                    .map(|(id, r, m)| (f(proc.symbol_name(*id)), *r, *m))
                     .collect(),
             ),
         }

@@ -1889,6 +1889,14 @@ impl<T: SymbolTable> IRProc<T> {
                 items.push(IROp::Call(out, lhs, scope.symbol("[]=")));
                 Ok(out)
             }
+            Expression::AssignMethod(lhs, name, rhs) => {
+                let rhs = Self::expand_expr(rhs, scope, items)?;
+                let lhs = Self::expand_expr(lhs, scope, items)?;
+                let out = scope.next_var();
+                let name = scope.symbol(&format!("{}=", name));
+                items.push(IROp::CallOne(out, lhs, name, rhs));
+                Ok(out)
+            }
             _ => unimplemented!("expr"),
         }
     }

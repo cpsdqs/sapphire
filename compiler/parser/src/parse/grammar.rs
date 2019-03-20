@@ -772,6 +772,8 @@ sapphire_parser_gen::parser! {
             }
         },
         e: expression ws t: token!(PDot, PDblColon,) wss i: method_name
+            // prevent overriding a.b = c
+            not!(do_parse!(ws >> token!(OAssign) >> ()); err: Expression)
             a: opt!(do_parse!(ws >> a: arguments_without_parens >> (a)))
             b: opt!(do_parse!(wss >> b: block >> (b))) => {
             let mut args = a.unwrap_or_default();
@@ -786,6 +788,20 @@ sapphire_parser_gen::parser! {
                     name: i,
                     args,
                 }
+            }
+        },
+        e: expression ws token!(PDot, PDblColon,) wss i: token!(ILocal, IConstant,)
+            ws t: assignment_operator wss v: expression => {
+            match t {
+                Token::OAssign => {
+                    Expression::AssignMethod(Box::new(e), i.clone().into(), Box::new(v))
+                }
+                token => Expression::AssignOp {
+                    member: Some(Box::new(e)),
+                    name: i.clone().into(),
+                    op: token.clone().into(),
+                    value: Box::new(v),
+                },
             }
         },
         method_definition,

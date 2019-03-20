@@ -1,3 +1,4 @@
+use crate::compile;
 use crate::context::Context;
 use crate::exception::Exception;
 use crate::heap::Ref;
@@ -20,6 +21,17 @@ pub fn init(context: &Arc<Context>) {
     module.def_method(Symbol::GEQ, Proc::Native(geq));
     module.def_method(Symbol::CMP, Proc::Native(cmp));
     module.def_method(Symbol::CASE_EQ, Proc::Native(case_eq));
+
+    let mut symbols = context.symbols_mut();
+    module.def_method(
+        symbols.symbol("attr"),
+        Proc::Sapphire(Arc::new(
+            compile!("def attr name; attr_reader name; end").new(&mut symbols),
+        )),
+    );
+    module.def_method(symbols.symbol("attr_accessor"), Proc::Native(attr_accessor));
+    module.def_method(symbols.symbol("attr_reader"), Proc::Native(attr_reader));
+    module.def_method(symbols.symbol("attr_writer"), Proc::Native(attr_writer));
 }
 
 fn assert_is_module(other: &Ref<Object>, thread: &mut Thread) -> Result<(), SendError> {
@@ -155,3 +167,84 @@ fn case_eq(recv: Value, args: Arguments, thread: &mut Thread) -> Result<Value, S
 
     Ok(Value::Bool(is_instance))
 }
+
+macro_rules! attr_accessor {
+    ($name:ident, $($reader:ident)?, $($writer:ident)?) => {
+        fn $name(
+            mut recv: Value,
+            args: Arguments,
+            thread: &mut Thread,
+        ) -> Result<Value, SendError> {
+            for arg in args.args {
+                let name = match arg {
+                    Value::Symbol(name) => name,
+                    _ => {
+                        return Err(SendError::Exception(Value::Ref(Exception::new(
+                            format!("attr_accessor argument is not a symbol"),
+                            thread.trace(),
+                            thread.context().exceptions().argument_error.clone(),
+                        ))));
+                    }
+                };
+                let name_str = thread
+                    .context()
+                    .symbols()
+                    .symbol_name(name)
+                    .unwrap_or("?")
+                    .to_string();
+
+                // TODO: check if name is local ident or constant ident
+
+                let mut name_with_eq = name_str;
+                name_with_eq += "=";
+                #[allow(unused_variables)]
+                let name_with_eq = thread.context().symbols_mut().symbol(name_with_eq);
+
+                $(
+                let $reader = compile!("def name; @name; end")
+                    .new_with(&mut |symbol| match symbol {
+                        "name" => name,
+                        s => panic!("unexpected symbol request {:?}", s),
+                    });
+                )?
+
+                $(
+                let $writer = compile!("def name= value; @name = value; end")
+                    .new_with(&mut |symbol| match symbol {
+                        "name=" => name_with_eq,
+                        "name" => name,
+                        s => panic!("unexpected symbol request {:?}", s),
+                    });
+                )?
+
+                $(
+                recv.send(
+                    Symbol::DEFINE_METHOD,
+                    Arguments::new(
+                        &mut iter::once(Value::Symbol(name)),
+                        Some(Value::Proc(Proc::Sapphire(Arc::new($reader)))),
+                    ),
+                    thread,
+                )?;
+                )?
+
+                $(
+                recv.send(
+                    Symbol::DEFINE_METHOD,
+                    Arguments::new(
+                        &mut iter::once(Value::Symbol(name_with_eq)),
+                        Some(Value::Proc(Proc::Sapphire(Arc::new($writer)))),
+                    ),
+                    thread,
+                )?;
+                )?
+            }
+
+            Ok(Value::Nil)
+        }
+    }
+}
+
+attr_accessor!(attr_accessor, reader, writer);
+attr_accessor!(attr_reader, reader,);
+attr_accessor!(attr_writer, , writer);
