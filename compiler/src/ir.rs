@@ -1880,6 +1880,15 @@ impl<T: SymbolTable> IRProc<T> {
                     Self::expand_assignment(&LeftHandSide::Var(lhs.clone()), rhs, scope, items)?;
                 Ok(out)
             }
+            Expression::AssignIndex(lhs, args, rhs) => {
+                let rhs = Self::expand_expr(rhs, scope, items)?;
+                let lhs = Self::expand_expr(lhs, scope, items)?;
+                let out = scope.next_var();
+                Self::expand_args(args, scope, items)?;
+                items.push(IROp::Arg(rhs));
+                items.push(IROp::Call(out, lhs, scope.symbol("[]=")));
+                Ok(out)
+            }
             _ => unimplemented!("expr"),
         }
     }

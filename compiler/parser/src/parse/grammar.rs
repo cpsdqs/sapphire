@@ -607,6 +607,7 @@ sapphire_parser_gen::parser! {
 
     assignment_operator: (&Token) = {
         t: token!(
+            OAssign,
             OAssignAnd,
             OAssignOr,
             OAssignBitAnd,
@@ -795,12 +796,39 @@ sapphire_parser_gen::parser! {
         if_expression,
         while_expression,
         for_expression,
-        e: expression ws token!(PLBracket) wss a: opt!(indexing_argument_list) wss
-            token!(PRBracket) => {
-            Expression::Index(Box::new(e), a.unwrap_or_default())
+        e: expression
+            ws token!(PLBracket)
+            wss a: opt!(indexing_argument_list)
+            wss token!(PRBracket)
+            o: opt!(do_parse!(
+                ws >> t: assignment_operator >> wss >> e: expression >> ((t, e))
+            )) => {
+            if let Some((t, v)) = o {
+                match t {
+                    Token::OAssign => {
+                        Expression::AssignIndex(Box::new(e), a.unwrap_or_default(), Box::new(v))
+                    }
+                    token => Expression::AssignIndexOp {
+                        expr: Box::new(e),
+                        index: a.unwrap_or_default(),
+                        op: token.clone().into(),
+                        value: Box::new(v),
+                    }
+                }
+            } else {
+                Expression::Index(Box::new(e), a.unwrap_or_default())
+            }
         },
-        i: variable ws token!(OAssign) wss e: expression => {
-            Expression::AssignVar(i, Box::new(e))
+        i: variable ws t: assignment_operator wss e: expression => {
+            match t {
+                Token::OAssign => Expression::AssignVar(i, Box::new(e)),
+                token => Expression::AssignOp {
+                    member: None,
+                    name: i,
+                    op: token.clone().into(),
+                    value: Box::new(e),
+                }
+            }
         },
         not!(alt!(keyword, operator_method_name, err: Expression); err: Expression)
             i: method_name
