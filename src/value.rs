@@ -2,7 +2,7 @@
 
 use crate::context::Context;
 use crate::heap::Ref;
-use crate::object::{Arguments, Object, SendError};
+use crate::object::{send, Arguments, Object, SendError};
 use crate::proc::Proc;
 use crate::symbol::Symbol;
 use crate::thread::Thread;
@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::{mem, slice};
 
 /// A value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Nil,
     Bool(bool),
@@ -33,8 +33,8 @@ impl Value {
         }
     }
 
-    /// The value of `object_id`.
-    pub fn object_id(&self) -> i64 {
+    /// Returns a hash of the immediate value.
+    pub fn hash(&self) -> i64 {
         let self_ptr = self as *const Value as *const u8;
         let self_buf = unsafe { slice::from_raw_parts(self_ptr, mem::size_of::<Value>()) };
         let mut hasher = DefaultHasher::new();
@@ -106,7 +106,7 @@ impl Object for Value {
 }
 
 macro_rules! impl_object_for_primitive {
-    ($ty:ty, $class:ident, $($inspect:tt)*) => {
+    ($ty:ty, $var:ident$(($s:tt))?, $class:ident, $($inspect:tt)*) => {
         impl Object for $ty {
             fn as_any(&self) -> &Any {
                 self
@@ -114,8 +114,19 @@ macro_rules! impl_object_for_primitive {
             fn as_any_mut(&mut self) -> &mut Any {
                 self
             }
-            fn send(&mut self, _: Symbol, _: Arguments, _: &mut Thread) -> Result<Value, SendError> {
-                unimplemented!("send")
+            fn send(
+                &mut self,
+                name: Symbol,
+                args: Arguments,
+                thread: &mut Thread
+            ) -> Result<Value, SendError> {
+                send(
+                    Value::$var$(($s self))?,
+                    thread.context().$class().clone(),
+                    name,
+                    args,
+                    thread,
+                )
             }
             fn get(&self, _: Symbol) -> Option<Value> {
                 None
@@ -128,9 +139,9 @@ macro_rules! impl_object_for_primitive {
     };
 }
 
-impl_object_for_primitive!((), nil_class, fn inspect(&self, _: &Context) -> String {
+impl_object_for_primitive!((), Nil, nil_class, fn inspect(&self, _: &Context) -> String {
     String::from("nil")
 });
-impl_object_for_primitive!(bool, bool_class, fn inspect(&self, _: &Context) -> String {
+impl_object_for_primitive!(bool, Bool(*), bool_class, fn inspect(&self, _: &Context) -> String {
     format!("{:?}", self)
 });

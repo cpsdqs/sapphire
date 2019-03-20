@@ -161,6 +161,8 @@ macro_rules! read_args {
         };
         read_args!(__impl $args, $thread, $c;);
     };
+    (__impl $args:expr, $thread:expr, $c:expr; *) => {
+    };
     (__impl $args:expr, $thread:expr, $c:expr;) => {
         match $args.args.next() {
             Some(_) => return Err(SendError::Exception(Value::Ref(Exception::new(

@@ -1,12 +1,13 @@
 //! VM threads.
 
 use crate::context::Context;
-use crate::exception::TraceItem;
+use crate::exception::{Exception, TraceItem};
 use crate::heap::{Ref, RefGuard};
 use crate::object::{Arguments, Object, RbClass, RbModule, SendError};
 use crate::proc::{AddressingMode, CStatic, Op, Proc, Static, SELF, VOID};
 use crate::symbol::Symbol;
 use crate::value::Value;
+use sapphire_compiler::Param;
 use smallvec::SmallVec;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -111,21 +112,6 @@ impl Frame {
     }
 }
 
-#[derive(Debug)]
-struct OwnedArguments {
-    args: Vec<Value>,
-    block: Option<Value>,
-}
-
-impl<'a> From<Arguments<'a>> for OwnedArguments {
-    fn from(this: Arguments<'a>) -> OwnedArguments {
-        OwnedArguments {
-            args: this.args.collect(),
-            block: this.block,
-        }
-    }
-}
-
 /// A thread that will synchronously execute bytecode.
 #[derive(Debug)]
 pub struct Thread {
@@ -136,7 +122,6 @@ pub struct Thread {
     modules: Stack<Ref<Object>>,
     pc: usize,
     arg_builder: ArgumentBuilder,
-    args: Option<OwnedArguments>,
     exception: Option<Value>,
 }
 
@@ -174,7 +159,6 @@ impl Thread {
             modules: Stack::new(1024),
             pc: 0,
             arg_builder: ArgumentBuilder::new(),
-            args: None,
             exception: None,
         }
     }
@@ -221,14 +205,13 @@ impl Thread {
         &mut self,
         proc: Proc,
         new_self: Value,
-        args: Option<Arguments>,
+        args: &Arguments,
     ) -> Result<(), ThreadError> {
         // TODO: push modules?
-        let block_given = args.as_ref().map_or(false, |args| args.block.is_some());
+        let block_given = args.block.is_some();
         self.frames.push(Frame::new(proc, new_self, block_given))?;
         self.pcs.push(self.pc)?;
         self.pc = 0;
-        self.args = args.map(|args| args.into());
         Ok(())
     }
 
@@ -238,6 +221,34 @@ impl Thread {
             self.pc = pc;
         }
         res
+    }
+
+    fn load_args(&mut self, args: Arguments) -> Result<(), SendError> {
+        let frame = self.frames.top_mut().unwrap();
+        let proc = match &frame.proc {
+            Proc::Sapphire(proc) => Arc::clone(&proc),
+            _ => panic!("Invalid proc type"),
+        };
+
+        for param in &proc.params.params {
+            match param {
+                Param::Mandatory(i) => {
+                    frame.register_mut()[*i as usize] = match args.args.next() {
+                        Some(value) => value,
+                        None => {
+                            return Err(SendError::Exception(Value::Ref(Exception::new(
+                                format!("missing mandatory argument"),
+                                self.trace(),
+                                self.context().exceptions().argument_error.clone(),
+                            ))));
+                        }
+                    }
+                }
+                _ => unimplemented!("other param types"),
+            }
+        }
+
+        Ok(())
     }
 
     fn read_addr(&mut self) -> Result<usize, ThreadError> {
@@ -282,7 +293,8 @@ impl Thread {
     ) -> Result<Value, SendError> {
         match proc {
             Proc::Sapphire(_) => {
-                self.push_frame(proc, receiver, Some(args))?;
+                self.push_frame(proc, receiver, &args)?;
+                self.load_args(args)?;
                 let result = loop {
                     match self.next() {
                         ThreadResult::NotReady => (),
