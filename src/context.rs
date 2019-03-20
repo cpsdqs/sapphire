@@ -2,10 +2,10 @@
 
 use crate::exception::Exceptions;
 use crate::heap::Ref;
-use crate::kernel::init as init_kernel;
 use crate::object::{init_root, Object, RbObject};
 use crate::symbol::{Symbol, Symbols};
 use crate::value::Value;
+use crate::{kernel, module};
 use fnv::FnvHashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::Arc;
@@ -54,7 +54,8 @@ impl Context {
             exceptions,
         });
 
-        init_kernel(&context);
+        kernel::init(&context);
+        module::init(&context);
 
         context
     }

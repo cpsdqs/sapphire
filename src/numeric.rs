@@ -26,19 +26,19 @@ impl Object for i64 {
             Symbol::CLASS => {
                 read_args!(args, thread; -);
                 Ok(Value::Ref(thread.context().fixnum_class().clone()))
-            },
+            }
             Symbol::UPLUS => {
                 read_args!(args, thread; -);
                 Ok(Value::Fixnum(*self))
-            },
+            }
             Symbol::UMINUS => {
                 read_args!(args, thread; -);
                 Ok(Value::Fixnum(-*self))
-            },
+            }
             Symbol::BIT_INV => {
                 read_args!(args, thread; -);
                 Ok(Value::Fixnum(!*self))
-            },
+            }
             Symbol::ADD
             | Symbol::SUB
             | Symbol::MUL

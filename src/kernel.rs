@@ -35,10 +35,13 @@ pub fn init(context: &Arc<Context>) {
 
         module.def_method(Symbol::RAISE, Proc::Native(raise));
         module.def_method(Symbol::BLOCK_GIVEN, Proc::Native(is_block_given));
+        module.def_method(Symbol::IS_A, Proc::Native(is_a));
+        module.def_method(Symbol::METHOD_MISSING, Proc::Native(method_missing));
 
         let mut symbols = context.symbols_mut();
         module.def_method(symbols.symbol("object_id"), Proc::Native(object_id));
         module.def_method(symbols.symbol("nil?"), Proc::Native(is_nil));
+        module.def_method(symbols.symbol("kind_of?"), Proc::Native(is_a));
     }
 }
 
@@ -62,5 +65,80 @@ fn is_nil(recv: Value, args: Arguments, thread: &mut Thread) -> Result<Value, Se
     match recv {
         Value::Nil => Ok(Value::Bool(true)),
         _ => Ok(Value::Bool(false)),
+    }
+}
+
+fn is_a(mut recv: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+    read_args!(args, thread; other: Ref);
+
+    let recv_class = match recv.send(Symbol::CLASS, Arguments::empty(), thread)? {
+        Value::Ref(class) => class,
+        _ => return Ok(Value::Bool(false)),
+    };
+
+    if recv_class == other {
+        return Ok(Value::Bool(true));
+    }
+
+    let other_is_class = other
+        .get()
+        .send(
+            Symbol::IS_A,
+            Arguments::new(
+                &mut iter::once(Value::Ref(thread.context().class_class().clone())),
+                None,
+            ),
+            thread,
+        )?
+        .is_truthy();
+
+    let mut current = recv_class;
+    loop {
+        if other_is_class && current == other {
+            return Ok(Value::Bool(true));
+        } else if !other_is_class {
+            let includes = current
+                .get()
+                .send(
+                    Symbol::DOES_INCLUDE,
+                    Arguments::new(&mut iter::once(Value::Ref(other.clone())), None),
+                    thread,
+                )?
+                .is_truthy();
+            if includes {
+                return Ok(Value::Bool(true));
+            }
+        }
+        let superclass = match current
+            .get()
+            .send(Symbol::SUPERCLASS, Arguments::empty(), thread)?
+        {
+            Value::Ref(class) => class,
+            _ => return Ok(Value::Bool(false)),
+        };
+        if superclass == current {
+            return Ok(Value::Bool(false));
+        } else {
+            current = superclass;
+        }
+    }
+}
+
+fn method_missing(recv: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+    match args.args.next() {
+        Some(Value::Symbol(name)) => Err(SendError::Exception(Value::Ref(Exception::new(
+            format!(
+                "method {} is missing for {}",
+                thread.context().symbols().symbol_name(name).unwrap_or("?"),
+                recv.inspect(thread.context())
+            ),
+            thread.trace(),
+            thread.context().exceptions().no_method_error.clone(),
+        )))),
+        _ => Err(SendError::Exception(Value::Ref(Exception::new(
+            format!("first method_missing argument is not a symbol"),
+            thread.trace(),
+            thread.context().exceptions().type_error.clone(),
+        )))),
     }
 }

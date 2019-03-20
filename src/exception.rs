@@ -98,6 +98,7 @@ pub struct Exceptions {
     pub name_error: Ref<Object>,
     pub no_method_error: Ref<Object>,
     pub argument_error: Ref<Object>,
+    pub type_error: Ref<Object>,
 }
 
 impl Exceptions {
@@ -107,78 +108,39 @@ impl Exceptions {
         class_class: Ref<Object>,
     ) -> Exceptions {
         // TODO: use macros or ruby for this
-        let exception = RbClass::new_unchecked(
-            ClassName::Name(symbols.symbol("Exception")),
-            object_class.clone(),
-            class_class.clone(),
-        );
-        let standard_error = RbClass::new_unchecked(
-            ClassName::Name(symbols.symbol("StandardError")),
-            exception.clone(),
-            class_class.clone(),
-        );
-        let zero_division_error = RbClass::new_unchecked(
-            ClassName::Name(symbols.symbol("ZeroDivisionError")),
-            standard_error.clone(),
-            class_class.clone(),
-        );
-        let name_error = RbClass::new_unchecked(
-            ClassName::Name(symbols.symbol("NameError")),
-            standard_error.clone(),
-            class_class.clone(),
-        );
-        let no_method_error = RbClass::new_unchecked(
-            ClassName::Name(symbols.symbol("NoMethodError")),
-            name_error.clone(),
-            class_class.clone(),
-        );
-        let argument_error = RbClass::new_unchecked(
-            ClassName::Name(symbols.symbol("ArgumentError")),
-            standard_error.clone(),
-            class_class,
-        );
+        macro_rules! def_exceptions {
+            ($($name:ident, $sym:expr, $super:expr;)+) => {
+                $(
+                let $name = RbClass::new_unchecked(
+                    ClassName::Name(symbols.symbol($sym)),
+                    $super.clone(),
+                    class_class.clone(),
+                );
+                )+
 
-        {
-            let mut object_class = object_class.get();
-            object_class
-                .set(symbols.symbol("Exception"), Value::Ref(exception.clone()))
-                .unwrap();
-            object_class
-                .set(
-                    symbols.symbol("StandardError"),
-                    Value::Ref(standard_error.clone()),
-                )
-                .unwrap();
-            object_class
-                .set(
-                    symbols.symbol("ZeroDivisionError"),
-                    Value::Ref(zero_division_error.clone()),
-                )
-                .unwrap();
-            object_class
-                .set(symbols.symbol("NameError"), Value::Ref(name_error.clone()))
-                .unwrap();
-            object_class
-                .set(
-                    symbols.symbol("NoMethodError"),
-                    Value::Ref(no_method_error.clone()),
-                )
-                .unwrap();
-            object_class
-                .set(
-                    symbols.symbol("ArgumentError"),
-                    Value::Ref(argument_error.clone()),
-                )
-                .unwrap();
+                {
+                    let mut object_class = object_class.get();
+                    $(
+                    object_class
+                        .set(symbols.symbol($sym), Value::Ref($name.clone()))
+                        .unwrap();
+                    )+
+                }
+
+                Exceptions {
+                    $($name,)+
+                }
+            }
         }
 
-        Exceptions {
-            exception,
-            standard_error,
-            zero_division_error,
-            name_error,
-            no_method_error,
-            argument_error,
+        def_exceptions! {
+            exception, "Exception", object_class;
+            standard_error, "StandardError", exception;
+            zero_division_error, "ZeroDivisionError", standard_error;
+            name_error, "NameError", standard_error;
+            no_method_error, "NoMethodError", name_error;
+            argument_error, "ArgumentError", standard_error;
+            type_error, "TypeError", standard_error;
         }
     }
 }

@@ -8,6 +8,7 @@ pub mod context;
 pub mod exception;
 pub mod heap;
 pub mod kernel;
+pub mod module;
 pub mod numeric;
 pub mod object;
 pub mod proc;

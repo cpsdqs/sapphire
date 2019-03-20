@@ -73,6 +73,12 @@ impl<T: ?Sized> fmt::Debug for Ref<T> {
     }
 }
 
+impl<T: ?Sized> PartialEq for Ref<T> {
+    fn eq(&self, other: &Ref<T>) -> bool {
+        self.as_ptr() as *const () == other.as_ptr() as *const ()
+    }
+}
+
 impl<T: ?Sized> Clone for Weak<T> {
     fn clone(&self) -> Self {
         Weak(WeakArc::clone(&self.0))

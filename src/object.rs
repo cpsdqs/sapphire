@@ -295,6 +295,10 @@ impl Object for RbModule {
                 self.modules.push(module);
                 Ok(Value::Nil)
             }
+            Symbol::CLASS => {
+                read_args!(args, thread; -);
+                Ok(Value::Ref(self.class.clone()))
+            }
             Symbol::SINGLETON_CLASS => {
                 read_args!(args, thread; -);
                 self.ensure_singleton_class(thread.context());
@@ -501,6 +505,10 @@ impl Object for RbClass {
             Symbol::SUPERCLASS => {
                 read_args!(args, thread; -);
                 Ok(Value::Ref(self.superclass.clone()))
+            }
+            Symbol::CLASS => {
+                read_args!(args, thread; -);
+                Ok(Value::Ref(self.class.clone()))
             }
             Symbol::SINGLETON_CLASS => {
                 read_args!(args, thread; -);
