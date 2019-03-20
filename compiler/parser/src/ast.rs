@@ -229,6 +229,26 @@ impl<'input> From<Token<'input>> for BinaryOp {
     }
 }
 
+impl<'input> From<AssignmentOp> for BinaryOp {
+    fn from(op: AssignmentOp) -> BinaryOp {
+        match op {
+            AssignmentOp::And => BinaryOp::And,
+            AssignmentOp::Or => BinaryOp::Or,
+            AssignmentOp::BitAnd => BinaryOp::BitAnd,
+            AssignmentOp::BitOr => BinaryOp::BitOr,
+            AssignmentOp::BitXor => BinaryOp::BitXor,
+            AssignmentOp::Shl => BinaryOp::Shl,
+            AssignmentOp::Shr => BinaryOp::Shr,
+            AssignmentOp::Add => BinaryOp::Add,
+            AssignmentOp::Sub => BinaryOp::Sub,
+            AssignmentOp::Mul => BinaryOp::Mul,
+            AssignmentOp::Div => BinaryOp::Div,
+            AssignmentOp::Rem => BinaryOp::Rem,
+            AssignmentOp::Pow => BinaryOp::Pow,
+        }
+    }
+}
+
 /// A list of statements.
 pub type StatementList = Vec<Statement>;
 

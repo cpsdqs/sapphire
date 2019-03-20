@@ -5,6 +5,10 @@ use quote::quote;
 use quote::TokenStreamExt;
 use sapphire_compiler::{AddressingMode, Param, Params, Proc, Static, SymbolTable};
 use std::collections::HashMap;
+use std::env;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use syn::parse::{Parse, ParseStream};
 use syn::*;
 
@@ -12,6 +16,7 @@ struct Input {
     out: Ident,
     code: LitStr,
     _comma: Token![,],
+    arg: Result<Ident>,
 }
 
 impl Parse for Input {
@@ -19,6 +24,7 @@ impl Parse for Input {
         Ok(Input {
             out: input.parse()?,
             _comma: input.parse()?,
+            arg: input.parse(),
             code: input.parse()?,
         })
     }
@@ -57,7 +63,32 @@ pub fn compile(tokens: PTokenStream) -> PTokenStream {
     let input = parse_macro_input!(tokens as Input);
 
     let out = input.out;
-    let code = input.code.value();
+
+    let file = match input.arg {
+        Ok(ident) => match &*format!("{}", ident) {
+            "file" => true,
+            arg => panic!("invalid argument {}", arg),
+        },
+        Err(_) => false,
+    };
+
+    let mut include_str = None;
+
+    let code = if file {
+        let cwd = env::var("CARGO_MANIFEST_DIR").unwrap_or(".".into());
+        let path = Path::new(&cwd).join(input.code.value());
+        let mut buf = String::new();
+        let path_str = path.to_string_lossy();
+        include_str = Some(quote! {
+            include_str!(#path_str)
+        });
+        File::open(path.clone())
+            .and_then(|mut file| file.read_to_string(&mut buf))
+            .expect(&format!("Failed to read file {:?}", path));
+        buf
+    } else {
+        input.code.value()
+    };
 
     if !code.starts_with("def") {
         panic!("code must be a method definition");
@@ -88,7 +119,12 @@ pub fn compile(tokens: PTokenStream) -> PTokenStream {
 
     let symbols = quote_symbols(symbols);
     let proc = quote_proc(proc, symbols);
+    let include_str = match include_str {
+        Some(include_str) => quote! { const _INCLUDE_STR: &str = #include_str; },
+        None => quote! {},
+    };
     let out = quote! {
+        #include_str
         pub const #out: sapphire_compiler::ConstProc = #proc;
     };
     out.into()

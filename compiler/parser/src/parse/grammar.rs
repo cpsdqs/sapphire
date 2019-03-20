@@ -890,6 +890,7 @@ sapphire_parser_gen::parser! {
         },
         token!(PDblColon) wss i: token!(IConstant) => (Expression::RootConst(i.clone().into())),
         literal,
+        token!(Kreturn) ws a: opt!(arguments_without_parens) => (Expression::Return(a)),
     }
 
     variable: Ident = {
@@ -1054,7 +1055,8 @@ sapphire_parser_gen::parser! {
                 Some((false, e)) => Parameter::Keyword(i.clone().into(), e),
                 None => Parameter::Mandatory(i.clone().into()),
             }
-        }
+        },
+        token!(OBitAnd) wss i: token!(ILocal) => (Parameter::Block(i.clone().into())),
     }
 
     body_statement: BodyStatement = {

@@ -1,9 +1,12 @@
 //! Execution contexts.
 
+use crate::compile;
 use crate::exception::Exceptions;
 use crate::heap::Ref;
-use crate::object::{init_root, Object, RbObject};
+use crate::object::{init_root, Arguments, Object, RbObject};
+use crate::proc::Proc;
 use crate::symbol::{Symbol, Symbols};
+use crate::thread::Thread;
 use crate::value::Value;
 use crate::{kernel, module};
 use fnv::FnvHashMap;
@@ -56,6 +59,16 @@ impl Context {
 
         kernel::init(&context);
         module::init(&context);
+
+        let proc = compile!(file "src/init.rb").new(&mut *context.symbols.write());
+        let mut thread = Thread::new(Arc::clone(&context));
+        thread
+            .call(
+                Value::Nil,
+                Proc::Sapphire(Arc::new(proc)),
+                Arguments::empty(),
+            )
+            .unwrap();
 
         context
     }

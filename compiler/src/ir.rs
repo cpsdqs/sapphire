@@ -1706,12 +1706,22 @@ impl<T: SymbolTable> IRProc<T> {
                 Ok(out)
             }
             Expression::Return(args) => {
-                if let Some(_args) = args {
-                    unimplemented!("return with args")
+                if let Some(args) = args {
+                    if args.items.len() == 1 && args.hash.len() == 0 && args.block.is_none() {
+                        match &args.items[0] {
+                            Argument::Expr(expr) => {
+                                let expr = Self::expand_expr(expr, scope, items)?;
+                                items.push(IROp::Return(expr));
+                                Ok(Var::Nil)
+                            }
+                            _ => unimplemented!("return with args"),
+                        }
+                    } else {
+                        unimplemented!("return with args")
+                    }
                 } else {
-                    let nil = scope.next_var();
-                    items.push(IROp::Return(nil));
-                    Ok(nil)
+                    items.push(IROp::Return(Var::Nil));
+                    Ok(Var::Nil)
                 }
             }
             Expression::Break(_args) => unimplemented!("break"),
@@ -1897,6 +1907,44 @@ impl<T: SymbolTable> IRProc<T> {
                 items.push(IROp::CallOne(out, lhs, name, rhs));
                 Ok(out)
             }
+            Expression::AssignOp {
+                member,
+                name,
+                op,
+                value,
+            } => {
+                let lhs_expr = if let Some(member) = member {
+                    Expression::Call {
+                        member: Some(member.clone()),
+                        name: name.clone(),
+                        args: Arguments::default(),
+                    }
+                } else {
+                    Expression::Variable(name.clone())
+                };
+
+                let bin_op_expr =
+                    Expression::BinOp(Box::new(lhs_expr), (*op).into(), value.clone());
+                let rhs = Self::expand_expr(&bin_op_expr, scope, items)?;
+                let lhs = match member {
+                    Some(expr) => LeftHandSide::Member(*expr.clone(), name.clone()),
+                    None => LeftHandSide::Var(name.clone()),
+                };
+                Self::expand_assignment(&lhs, rhs, scope, items)
+            }
+            Expression::AssignIndexOp {
+                expr,
+                index,
+                op,
+                value,
+            } => {
+                let lhs_expr = Expression::Index(expr.clone(), index.clone());
+                let bin_op_expr =
+                    Expression::BinOp(Box::new(lhs_expr), (*op).into(), value.clone());
+                let rhs = Self::expand_expr(&bin_op_expr, scope, items)?;
+                let lhs = LeftHandSide::Index(*expr.clone(), Some(index.clone()));
+                Self::expand_assignment(&lhs, rhs, scope, items)
+            }
             _ => unimplemented!("expr"),
         }
     }
@@ -1949,8 +1997,8 @@ impl<T: SymbolTable> IRProc<T> {
                 if let Some(args) = args {
                     Self::expand_args(args, scope, items)?;
                 }
-                items.push(IROp::Call(expr, expr, scope.symbol("[]")));
-                items.push(IROp::Assign(expr, rhs));
+                items.push(IROp::Arg(rhs));
+                items.push(IROp::Call(expr, expr, scope.symbol("[]=")));
                 Ok(rhs)
             }
             LeftHandSide::Member(expr, ident) => {

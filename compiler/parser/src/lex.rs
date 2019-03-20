@@ -530,6 +530,8 @@ named!(operator_method_name<&str, Token>, alt_complete!(
     | do_parse!(tag!("<=") >> (Token::OLeq))
     | do_parse!(tag!("<<") >> (Token::OShl))
     | do_parse!(tag!("<") >> (Token::OLt))
+    | do_parse!(tag!("+@") >> (Token::OUPlus))
+    | do_parse!(tag!("-@") >> (Token::OUMinus))
     | do_parse!(tag!("+") >> (Token::OAdd))
     | do_parse!(tag!("-") >> (Token::OSub))
     | do_parse!(tag!("**") >> (Token::OPow))
@@ -537,8 +539,6 @@ named!(operator_method_name<&str, Token>, alt_complete!(
     | do_parse!(tag!("/") >> (Token::ODiv))
     | do_parse!(tag!("%") >> (Token::ORem))
     | do_parse!(tag!("~") >> (Token::OBitInv))
-    | do_parse!(tag!("+@") >> (Token::OUPlus))
-    | do_parse!(tag!("-@") >> (Token::OUMinus))
     | do_parse!(tag!("[]=") >> (Token::OAssignIndex))
     | do_parse!(tag!("[]") >> (Token::OIndex))
 ));
@@ -692,9 +692,9 @@ named!(symbol_literal<&str, Token>, do_parse!(
         instance_variable_identifier
         | global_variable_identifier
         | class_variable_identifier
+        | method_only_identifier
         | constant_identifier
         | local_variable_identifier
-        | method_only_identifier
         | assignment_like_method_identifier
         | operator_method_name
         | keyword

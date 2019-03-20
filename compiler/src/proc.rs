@@ -298,20 +298,27 @@ impl ConstProc {
         &self,
         f: &mut F,
     ) -> Proc<T, U> {
+        self.new_with_root(f, self)
+    }
+    fn new_with_root<T: SymbolTable, U, F: FnMut(&str) -> T::Symbol>(
+        &self,
+        f: &mut F,
+        root: &ConstProc,
+    ) -> Proc<T, U> {
         Proc {
-            name: f(self.symbol_name(self.name)),
+            name: f(self.symbol_name(self.name, root)),
             registers: self.registers,
             block_idx: self.block_idx,
-            statics: self.statics.iter().map(|s| s.new(self, f)).collect(),
+            statics: self.statics.iter().map(|s| s.new(self, f, root)).collect(),
             mode: self.mode,
             code: self.code.to_vec(),
-            params: self.params.new(self, f),
+            params: self.params.new(self, f, root),
             parent_registers: Vec::new(),
         }
     }
 
-    fn symbol_name(&self, id: usize) -> &str {
-        self.symbols.iter().find(|(i, _)| *i == id).unwrap().1
+    fn symbol_name(&self, id: usize, root: &ConstProc) -> &str {
+        root.symbols.iter().find(|(i, _)| *i == id).unwrap().1
     }
 }
 
@@ -320,13 +327,14 @@ impl ConstStatic {
         &self,
         proc: &ConstProc,
         f: &mut F,
+        root: &ConstProc,
     ) -> Static<T, U> {
         match self {
             ConstStatic::Int(i) => Static::Int(*i),
             ConstStatic::Float(i) => Static::Float(*i),
             ConstStatic::Str(i) => Static::Str(i.to_string()),
-            ConstStatic::Sym(i) => Static::Sym(f(proc.symbol_name(*i))),
-            ConstStatic::Proc(i) => Static::Proc(Arc::new(i.new_with(f))),
+            ConstStatic::Sym(i) => Static::Sym(f(proc.symbol_name(*i, root))),
+            ConstStatic::Proc(i) => Static::Proc(Arc::new(i.new_with_root(f, root))),
         }
     }
 }
@@ -336,12 +344,13 @@ impl ConstParams {
         &self,
         proc: &ConstProc,
         f: &mut F,
+        root: &ConstProc,
     ) -> Params<T> {
         Params {
             params: self
                 .params
                 .iter()
-                .map(|param| param.new::<T, F>(proc, f))
+                .map(|param| param.new::<T, F>(proc, f, root))
                 .collect(),
             block: self.block,
         }
@@ -353,6 +362,7 @@ impl ConstParam {
         &self,
         proc: &ConstProc,
         f: &mut F,
+        root: &ConstProc,
     ) -> Param<T::Symbol> {
         match self {
             ConstParam::Mandatory(i) => Param::Mandatory(*i),
@@ -360,7 +370,7 @@ impl ConstParam {
             ConstParam::Splat(i) => Param::Splat(*i),
             ConstParam::Hash(hash) => Param::Hash(
                 hash.iter()
-                    .map(|(id, r, m)| (f(proc.symbol_name(*id)), *r, *m))
+                    .map(|(id, r, m)| (f(proc.symbol_name(*id, root)), *r, *m))
                     .collect(),
             ),
         }
