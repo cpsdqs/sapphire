@@ -58,6 +58,7 @@ impl SymbolTable for Symbols {
     }
 }
 
+/// Use `sapphire::compile!` instead.
 #[proc_macro]
 pub fn compile(tokens: PTokenStream) -> PTokenStream {
     let input = parse_macro_input!(tokens as Input);

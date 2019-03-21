@@ -5,9 +5,13 @@ use smallvec::SmallVec;
 use std::fmt::{self, Write};
 use std::sync::Arc;
 
+/// Number of reserved special registers.
 pub const RESERVED_REGISTERS: usize = 3;
+/// Nil register: must always contain nil.
 pub const NIL: usize = 0;
+/// Void register: to be used for discarding unused outputs.
 pub const VOID: usize = 1;
+/// Self register: contains `self`.
 pub const SELF: usize = 2;
 
 /// A procedure containing a set of VM instructions.
@@ -238,17 +242,19 @@ pub struct Params<T: SymbolTable> {
     pub params: SmallVec<[Param<T::Symbol>; 8]>,
     /// The register for the block parameter.
     pub block: u16,
-    /// If None, parameters are in the order `mandatory, optional, splat`
+    /// If None, parameters will be assumed to be in the order `mandatory, optional, splat`.
     pub nonlinear: Option<NonLinearParams>,
 }
 
+/// Helper data for `Params` with arbitrary parameter order.
 #[derive(Debug, Clone)]
 pub struct NonLinearParams {
     pub min_args_after: SmallVec<[usize; 8]>,
 }
 
 impl<T: SymbolTable> Params<T> {
-    pub(crate) fn update_linear(&mut self) {
+    /// Updates the `nonlinear` property.
+    pub fn update_linear(&mut self) {
         let mut is_linear = true;
         let mut state = 0;
 
@@ -317,6 +323,7 @@ impl<T: SymbolTable> PartialEq for Params<T> {
     }
 }
 
+/// A `Proc` defined at compile-time.
 #[derive(Debug)]
 pub struct ConstProc {
     pub symbols: &'static [(usize, &'static str)],
@@ -353,9 +360,14 @@ pub enum ConstParam {
 }
 
 impl ConstProc {
+    /// Creates a new `Proc` from the `ConstProc` using the given symbol table to translate symbols.
     pub fn new<T: SymbolTable, U>(&self, symbols: &mut T) -> Proc<T, U> {
         self.new_with(&mut |sym| symbols.symbol(sym))
     }
+
+    /// Creates a new `Proc` from the `ConstProc` using the given closure to obtain symbols.
+    ///
+    /// This may be useful for templating since symbols can be remapped arbitrarily.
     pub fn new_with<T: SymbolTable, U, F: FnMut(&str) -> T::Symbol>(
         &self,
         f: &mut F,

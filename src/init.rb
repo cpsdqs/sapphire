@@ -14,6 +14,110 @@ def sapphire_init
         end
     end
 
+    module ::Enumerable
+        def all?
+            self.each do |item|
+                if not block_given? and !item
+                    return false
+                elsif not yield item
+                    return false
+                end
+            end
+            true
+        end
+
+        def any?
+            self.each do |item|
+                if not block_given? and item
+                    return true
+                elsif yield item
+                    return true
+                end
+            end
+            false
+        end
+
+        def collect
+            array = Array.new
+            self.each do |item|
+                if block_given?
+                    array << yield item
+                else
+                    array << item
+                end
+            end
+            array
+        end
+
+        def detect fallback = nil
+            self.each do |item|
+                if block_given? and res = yield item
+                    return res
+                elsif not block_given?
+                    return item
+                end
+            end
+            fallback
+        end
+
+        def each_with_index
+            i = 0
+            self.each do |item|
+                if block_given?
+                    yield item, i
+                end
+            end
+            self
+        end
+
+        def entries
+            array = Array.new
+            self.each do |item|
+                array << item
+            end
+            array
+        end
+
+        def find_all
+            array = Array.new
+            self.each do |item|
+                if block_given? and yield item
+                    array << item
+                else
+                    array << item
+                end
+            end
+            array
+        end
+
+        def grep pattern
+            array = Array.new
+            self.each do |item|
+                if item === pattern
+                    if block_given?
+                        array << yield item
+                    else
+                        array << item
+                    end
+                end
+            end
+            array
+        end
+
+        def include? obj
+            self.each do |item|
+                if item == obj
+                    return true
+                end
+            end
+            false
+        end
+    end
+
+    class ::Array
+        include ::Enumerable
+    end
+
     class ::NilClass
         def & other
             false
@@ -97,9 +201,9 @@ def sapphire_init
 
         def coerce other
             if self.class == other.class
-                ::Array.new other, self
+                [other, self]
             else
-                ::Array.new x.to_f, self.to_f
+                [x.to_f, self.to_f]
             end
         end
     end

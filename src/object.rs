@@ -90,6 +90,18 @@ impl<'a> Arguments<'a> {
     }
 }
 
+/// Reads method arguments.
+///
+/// - args: Arguments
+/// - thread: &mut Thread
+///
+/// # Examples
+/// - `read_args!(args, thread; -)` - asserts empty arguments
+/// - `read_args!(args, thread; an_argument)` - mandatory `an_argument`
+/// - `read_args!(args, thread; an_argument?)` - optional `an_argument`
+/// - `read_args!(args, thread; an_argument: Ref)` - unwraps a `Value` variant
+/// - `read_args!(args, thread; an_argument: Ref?)` - optional `Value` variant
+/// - `read_args!(args, thread; arg, *)` - does not assert a maximum number of arguments
 #[macro_export]
 macro_rules! read_args {
     ($args:expr, $thread:expr; -) => {
@@ -122,6 +134,28 @@ macro_rules! read_args {
         };
         read_args!(__impl $args, $thread, $c + 1; $($rest)*);
     };
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident: $ty:ident?, $($rest:tt)*) => {
+        let $var = match $args.args.next() {
+            Some(Value::$ty(arg)) => Some(arg),
+            Some(value) => {
+                return Err(SendError::Exception(Value::Ref(Exception::new(
+                    format!(
+                        "Expected a {}, got {}",
+                        stringify!($ty),
+                        value.inspect($thread.context())
+                    ),
+                    $thread.trace(),
+                    $thread.context().exceptions().argument_error.clone(),
+                ))));
+            }
+            None => None,
+        };
+        read_args!(__impl $args, $thread, $c + 1; $($rest)*);
+    };
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident?, $($rest:tt)*) => {
+        let $var = $args.args.next();
+        read_args!(__impl $args, $thread, $c + 1; $($rest)*);
+    };
     (__impl $args:expr, $thread:expr, $c:expr; $var:ident, $($rest:tt)*) => {
         let $var = match $args.args.next() {
             Some(arg) => arg,
@@ -135,8 +169,14 @@ macro_rules! read_args {
         };
         read_args!(__impl $args, $thread, $c + 1; $($rest)*);
     };
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident: $ty:ident?) => {
+        read_args!(__impl $args, $thread, $c; $var: $ty?,);
+    };
     (__impl $args:expr, $thread:expr, $c:expr; $var:ident: $ty:ident) => {
         read_args!(__impl $args, $thread, $c; $var: $ty,);
+    };
+    (__impl $args:expr, $thread:expr, $c:expr; $var:ident?) => {
+        read_args!(__impl $args, $thread, $c; $var?,);
     };
     (__impl $args:expr, $thread:expr, $c:expr; $var:ident) => {
         read_args!(__impl $args, $thread, $c; $var,);
@@ -454,7 +494,7 @@ impl RbClass {
         }
     }
 
-    fn ensure_singleton_class(&mut self, context: &Context) {
+    pub(crate) fn ensure_singleton_class(&mut self, context: &Context) {
         if self.singleton_class.is_some() {
             return;
         }
@@ -464,6 +504,10 @@ impl RbClass {
             self.class.clone(),
             context,
         ));
+    }
+
+    pub(crate) fn singleton_class(&self) -> Option<&Ref<Object>> {
+        self.singleton_class.as_ref()
     }
 }
 

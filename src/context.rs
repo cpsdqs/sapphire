@@ -8,7 +8,7 @@ use crate::proc::Proc;
 use crate::symbol::{Symbol, Symbols};
 use crate::thread::Thread;
 use crate::value::Value;
-use crate::{kernel, module, proc};
+use crate::{collections, kernel, module, proc};
 use fnv::FnvHashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::Arc;
@@ -30,6 +30,8 @@ pub struct Context {
     symbol_class: Ref<Object>,
     string_class: Ref<Object>,
     proc_class: Ref<Object>,
+    array_class: Ref<Object>,
+    hash_class: Ref<Object>,
     object_class: Ref<Object>,
     class_class: Ref<Object>,
     module_class: Ref<Object>,
@@ -74,6 +76,8 @@ impl Context {
             symbol_class: "Symbol" < object_class;
             string_class: "String" < object_class;
             proc_class: "Proc" < object_class;
+            array_class: "Array" < object_class;
+            hash_class: "Hash" < object_class;
         }
 
         let context = Arc::new(Context {
@@ -90,6 +94,8 @@ impl Context {
             symbol_class,
             string_class,
             proc_class,
+            array_class,
+            hash_class,
             object_class: object_class.clone(),
             class_class,
             module_class,
@@ -110,12 +116,15 @@ impl Context {
                 symbol_class: "Symbol";
                 string_class: "String";
                 proc_class: "Proc";
+                array_class: "Array";
+                hash_class: "Hash";
             }
         }
 
         kernel::init(&context);
         module::init(&context);
         proc::init(&context);
+        collections::init(&context);
 
         let proc = compile!(file "src/init.rb").new(&mut *context.symbols.write());
         let mut thread = Thread::new(Arc::clone(&context));
@@ -167,6 +176,8 @@ impl_getters! {
     symbol_class: Ref<Object>,
     string_class: Ref<Object>,
     proc_class: Ref<Object>,
+    array_class: Ref<Object>,
+    hash_class: Ref<Object>,
     object_class: Ref<Object>,
     class_class: Ref<Object>,
     module_class: Ref<Object>,

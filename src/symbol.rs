@@ -53,6 +53,9 @@ impl Object for Symbol {
 macro_rules! def_common_symbols {
     ($name:ident = $str:expr, $($rest:tt)+) => {
         impl Symbol {
+            #[doc = "```text"]
+            #[doc = $str]
+            #[doc = "```"]
             pub const $name: Symbol = Symbol(0);
             def_common_symbols!(__def_consts 1, $($rest)+);
         }
@@ -65,10 +68,16 @@ macro_rules! def_common_symbols {
         }
     };
     (__def_consts $c:expr, $name:ident = $str:expr, $($rest:tt)+) => {
+        #[doc = "```text"]
+        #[doc = $str]
+        #[doc = "```"]
         pub const $name: Symbol = Symbol($c);
         def_common_symbols!(__def_consts $c + 1, $($rest)+);
     };
     (__def_consts $c:expr, $name:ident = $str:expr,) => {
+        #[doc = "```text"]
+        #[doc = $str]
+        #[doc = "```"]
         pub const $name: Symbol = Symbol($c);
     };
     (__def_table $c:expr, $table:expr, $name:ident = $str:expr, $($rest:tt)+) => {
@@ -112,6 +121,8 @@ def_common_symbols! {
     BIT_OR = "|",
     BIT_XOR = "^",
     BIT_INV = "~",
+    INDEX = "[]",
+    INDEX_EQ = "[]=",
     TO_S = "to_s",
     TO_I = "to_i",
     IS_A = "is_a?",

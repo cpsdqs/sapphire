@@ -1,3 +1,5 @@
+//! Module and class implementations.
+
 use crate::compile;
 use crate::context::Context;
 use crate::exception::Exception;
@@ -11,6 +13,7 @@ use crate::value::Value;
 use std::iter;
 use std::sync::Arc;
 
+/// Initializes module and class methods in the given context.
 pub fn init(context: &Arc<Context>) {
     let mut module_ref = context.module_class().get();
     let module: &mut RbClass = Object::downcast_mut(&mut *module_ref).unwrap();

@@ -812,6 +812,7 @@ sapphire_parser_gen::parser! {
         if_expression,
         while_expression,
         for_expression,
+        array_expression,
         e: expression
             ws token!(PLBracket)
             wss a: opt!(indexing_argument_list)
@@ -891,6 +892,7 @@ sapphire_parser_gen::parser! {
         token!(PDblColon) wss i: token!(IConstant) => (Expression::RootConst(i.clone().into())),
         literal,
         token!(Kreturn) ws a: opt!(arguments_without_parens) => (Expression::Return(a)),
+        token!(Kyield) ws a: opt!(arguments_without_parens) => (Expression::Yield(a)),
     }
 
     variable: Ident = {
@@ -1226,6 +1228,12 @@ sapphire_parser_gen::parser! {
                 expr: Box::new(e),
                 body: b,
             }
+        }
+    }
+
+    array_expression: Expression = {
+        token!(PLBracket) wss a: opt!(indexing_argument_list) wss token!(PRBracket) => {
+            Expression::ArrayConstructor(a)
         }
     }
 }

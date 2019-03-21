@@ -15,14 +15,19 @@ pub use sapphire_compiler::{
     AddressingMode, Op, Proc as CProc, Static as CStatic, NIL, SELF, VOID,
 };
 
+/// Callable functions.
 #[derive(Clone)]
 pub enum Proc {
+    /// A Proc with a VM implementation.
     Sapphire(Arc<CProc<Symbols, Register>>),
+
+    /// A Proc with a Native implementation.
     Native(fn(this: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError>),
 }
 pub type Static = CStatic<Symbols, Register>;
 
 impl Proc {
+    /// Soft-unwraps Proc::Sapphire.
     pub fn sapphire(&self) -> Option<&CProc<Symbols, Register>> {
         match self {
             Proc::Sapphire(v) => Some(v),
@@ -91,6 +96,7 @@ impl PartialEq for Proc {
     }
 }
 
+/// Initializes proc methods in the given context.
 pub fn init(context: &Arc<Context>) {
     let mut proc_ref = context.module_class().get();
     let proc: &mut RbClass = Object::downcast_mut(&mut *proc_ref).unwrap();

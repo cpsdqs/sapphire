@@ -110,6 +110,7 @@ pub fn compile<T: SymbolTable, U: PartialEq>(
     Ok(compile_ir(name, input, symbols)?.into())
 }
 
+/// A symbol table that can convert identifiers to symbols.
 pub trait SymbolTable {
     type Symbol: core::fmt::Debug + Copy + PartialEq;
     fn symbol(&mut self, name: &str) -> Self::Symbol;

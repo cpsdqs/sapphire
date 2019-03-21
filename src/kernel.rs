@@ -1,3 +1,5 @@
+//! Kernel implementation.
+
 use crate::context::Context;
 use crate::exception::Exception;
 use crate::object::{Arguments, Object, RbModule, SendError};
@@ -9,6 +11,7 @@ use crate::value::Value;
 use std::iter;
 use std::sync::Arc;
 
+/// Initializes kernel methods in the given context.
 pub fn init(context: &Arc<Context>) {
     let name = context.symbols_mut().symbol("Kernel");
     let module = RbModule::new(name, context);

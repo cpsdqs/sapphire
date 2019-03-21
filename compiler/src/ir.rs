@@ -1257,7 +1257,7 @@ impl<T: SymbolTable> IRProc<T> {
                 if let Some(args) = args {
                     Self::expand_args(args, scope, items)?;
                 }
-                items.push(IROp::Call(out, out, scope.symbol("new")));
+                items.push(IROp::Call(out, out, scope.symbol("[]")));
                 Ok(out)
             }
             Expression::HashConstructor(args) => {

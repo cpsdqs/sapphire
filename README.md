@@ -1,2 +1,2 @@
 # Sapphire
-Non-general-purpose Ruby VM
+Sort of a Ruby VM
