@@ -105,43 +105,78 @@ impl Object for Value {
     }
 }
 
-macro_rules! impl_object_for_primitive {
-    ($ty:ty, $var:ident$(($s:tt))?, $class:ident, $($inspect:tt)*) => {
-        impl Object for $ty {
-            fn as_any(&self) -> &Any {
-                self
-            }
-            fn as_any_mut(&mut self) -> &mut Any {
-                self
-            }
-            fn send(
-                &mut self,
-                name: Symbol,
-                args: Arguments,
-                thread: &mut Thread
-            ) -> Result<Value, SendError> {
-                send(
-                    Value::$var$(($s self))?,
-                    thread.context().$class().clone(),
-                    name,
-                    args,
-                    thread,
-                )
-            }
-            fn get(&self, _: Symbol) -> Option<Value> {
-                None
-            }
-            fn set(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
-                Err(())
-            }
-            $($inspect)*
+impl Object for () {
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
+    }
+    fn send(
+        &mut self,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
+    ) -> Result<Value, SendError> {
+        match name {
+            Symbol::CLASS => Ok(Value::Ref(thread.context().nil_class().clone())),
+            name => send(
+                Value::Nil,
+                thread.context().nil_class().clone(),
+                name,
+                args,
+                thread,
+            ),
         }
-    };
+    }
+    fn get(&self, _: Symbol) -> Option<Value> {
+        None
+    }
+    fn set(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
+        Err(())
+    }
+    fn inspect(&self, _: &Context) -> String {
+        String::from("nil")
+    }
 }
 
-impl_object_for_primitive!((), Nil, nil_class, fn inspect(&self, _: &Context) -> String {
-    String::from("nil")
-});
-impl_object_for_primitive!(bool, Bool(*), bool_class, fn inspect(&self, _: &Context) -> String {
-    format!("{:?}", self)
-});
+impl Object for bool {
+    fn as_any(&self) -> &Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut Any {
+        self
+    }
+    fn send(
+        &mut self,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
+    ) -> Result<Value, SendError> {
+        match name {
+            Symbol::CLASS => match self {
+                true => Ok(Value::Ref(thread.context().true_class().clone())),
+                false => Ok(Value::Ref(thread.context().false_class().clone())),
+            },
+            _ => send(
+                Value::Bool(*self),
+                match self {
+                    true => thread.context().true_class().clone(),
+                    false => thread.context().false_class().clone(),
+                },
+                name,
+                args,
+                thread,
+            ),
+        }
+    }
+    fn get(&self, _: Symbol) -> Option<Value> {
+        None
+    }
+    fn set(&mut self, _: Symbol, _: Value) -> Result<(), ()> {
+        Err(())
+    }
+    fn inspect(&self, _: &Context) -> String {
+        format!("{}", self)
+    }
+}

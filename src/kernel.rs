@@ -40,6 +40,7 @@ pub fn init(context: &Arc<Context>) {
         module.def_method(Symbol::EQ, Proc::Native(eq));
         module.def_method(Symbol::CASE_EQ, Proc::Native(case_eq));
         module.def_method(Symbol::SEND, Proc::Native(send));
+        module.def_method(Symbol::INSPECT, Proc::Native(inspect));
 
         let mut symbols = context.symbols_mut();
         module.def_method(symbols.symbol("object_id"), Proc::Native(hash));
@@ -47,7 +48,6 @@ pub fn init(context: &Arc<Context>) {
         module.def_method(symbols.symbol("nil?"), Proc::Native(is_nil));
         module.def_method(symbols.symbol("kind_of?"), Proc::Native(is_a));
         module.def_method(symbols.symbol("instance_of?"), Proc::Native(instance_of));
-        module.def_method(symbols.symbol("inspect"), Proc::Native(inspect));
         module.def_method(symbols.symbol("eql?"), Proc::Native(eq));
         module.def_method(symbols.symbol("equal?"), Proc::Native(eq));
         module.def_method(symbols.symbol("loop"), Proc::Native(k_loop));

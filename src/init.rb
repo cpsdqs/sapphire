@@ -107,10 +107,10 @@ def sapphire_init
     class ::Range
         attr_accessor :begin, :end
 
-        def initialize range_begin, range_end, inclusive = true
+        def initialize range_begin, range_end, exclude_end = false
             @begin = range_begin
             @end = range_end
-            @inclusive = inclusive
+            @inclusive = !exclude_end
         end
 
         def == other
@@ -152,6 +152,14 @@ def sapphire_init
 
         def exclude_end?
             !@inclusive
+        end
+
+        def inspect
+            if @inclusive
+                "#@begin..#@end"
+            else
+                "#@begin...#@end"
+            end
         end
     end
 end

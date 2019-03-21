@@ -1,7 +1,9 @@
 //! Procs.
 
 use crate::context::Context;
-use crate::object::{Arguments, Object, SendError};
+use crate::exception::Exception;
+use crate::object::{send, Arguments, Object, RbClass, SendError};
+use crate::read_args;
 use crate::symbol::{Symbol, Symbols};
 use crate::thread::{Register, Thread};
 use crate::value::Value;
@@ -38,11 +40,20 @@ impl Object for Proc {
     }
     fn send(
         &mut self,
-        _name: Symbol,
-        _args: Arguments,
-        _thread: &mut Thread,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
     ) -> Result<Value, SendError> {
-        unimplemented!("send")
+        match name {
+            Symbol::CLASS => Ok(Value::Ref(thread.context().proc_class().clone())),
+            name => send(
+                Value::Proc(self.clone()),
+                thread.context().proc_class().clone(),
+                name,
+                args,
+                thread,
+            ),
+        }
     }
     fn inspect(&self, context: &Context) -> String {
         match self {
@@ -78,4 +89,21 @@ impl PartialEq for Proc {
             _ => false,
         }
     }
+}
+
+pub fn init(context: &Arc<Context>) {
+    let mut proc_ref = context.module_class().get();
+    let proc: &mut RbClass = Object::downcast_mut(&mut *proc_ref).unwrap();
+
+    proc.def_method(Symbol::SAPPHIRE_ALLOCATE, Proc::Native(allocate_proc));
+    proc.def_method(Symbol::INITIALIZE, Proc::Native(init_proc));
+}
+
+fn allocate_proc(_: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+    read_args!(args, thread; &block);
+    Ok(Value::Proc(block))
+}
+
+fn init_proc(_: Value, _: Arguments, _: &mut Thread) -> Result<Value, SendError> {
+    Ok(Value::Nil)
 }

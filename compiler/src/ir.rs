@@ -1757,15 +1757,15 @@ impl<T: SymbolTable> IRProc<T> {
                 } else {
                     scope.next_var() // nil
                 };
-                let incl = scope.next_var();
-                items.push(IROp::LoadBool(incl, *inclusive));
+                let exclude_end = scope.next_var();
+                items.push(IROp::LoadBool(exclude_end, !*inclusive));
 
                 let out = scope.next_var();
                 items.push(IROp::LoadRoot(out));
                 items.push(IROp::LoadConst(out, out, scope.symbol("Range")));
                 items.push(IROp::Arg(start));
                 items.push(IROp::Arg(end));
-                items.push(IROp::Arg(incl));
+                items.push(IROp::Arg(exclude_end));
                 items.push(IROp::Call(out, out, scope.symbol("new")));
                 Ok(out)
             }
@@ -2103,7 +2103,7 @@ impl<T: SymbolTable> IRProc<T> {
         items: &mut Vec<IROp<T>>,
     ) -> Result<(), IRError> {
         let mut arg_items = Vec::new();
-        for item in args.items.iter().rev() {
+        for item in args.items.iter() {
             match item {
                 Argument::Expr(expr) => {
                     let expr = Self::expand_expr(expr, scope, items)?;

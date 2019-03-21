@@ -1,7 +1,7 @@
 //! Symbols and symbol tables.
 
 use crate::context::Context;
-use crate::object::{Arguments, Object, SendError};
+use crate::object::{send, Arguments, Object, SendError};
 use crate::thread::Thread;
 use crate::value::Value;
 use sapphire_compiler::SymbolTable;
@@ -24,11 +24,20 @@ impl Object for Symbol {
     }
     fn send(
         &mut self,
-        _name: Symbol,
-        _args: Arguments,
-        _thread: &mut Thread,
+        name: Symbol,
+        args: Arguments,
+        thread: &mut Thread,
     ) -> Result<Value, SendError> {
-        unimplemented!("send")
+        match name {
+            Symbol::CLASS => Ok(Value::Ref(thread.context().symbol_class().clone())),
+            name => send(
+                Value::Symbol(*self),
+                thread.context().symbol_class().clone(),
+                name,
+                args,
+                thread,
+            ),
+        }
     }
     fn inspect(&self, context: &Context) -> String {
         format!(":{}", context.symbols().symbol_name(*self).unwrap_or("?"))
@@ -111,6 +120,9 @@ def_common_symbols! {
     BLOCK_GIVEN = "block_given?",
     SINGLETON_CLASS = "singleton_class",
     DOES_INCLUDE = "include?",
+    SAPPHIRE_ALLOCATE = "sapphire_allocate",
+    CALL = "call",
+    INSPECT = "inspect",
 }
 
 /// A symbol table.

@@ -14,6 +14,10 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 use std::{iter, mem};
 
+lazy_static::lazy_static! {
+    static ref ARGUMENT_NOT_GIVEN: Value = Value::Ref(Ref::new(Value::Nil));
+}
+
 /// A stack frame.
 #[derive(Debug)]
 struct Frame {
@@ -229,22 +233,94 @@ impl Thread {
             _ => panic!("Invalid proc type"),
         };
 
-        for param in &proc.params.params {
-            match param {
-                Param::Mandatory(i) => {
-                    frame.register_mut()[*i as usize] = match args.args.next() {
-                        Some(value) => value,
-                        None => {
-                            return Err(SendError::Exception(Value::Ref(Exception::new(
-                                format!("missing mandatory argument"),
-                                self.trace(),
-                                self.context().exceptions().argument_error.clone(),
-                            ))));
+        let mut expected_at_most = 0;
+
+        if let Some(nonlinear) = &proc.params.nonlinear {
+            let args: SmallVec<[Value; 3]> = args.args.collect();
+            let mut args_left = args.len();
+            let mut args = args.into_iter();
+
+            for (param, min_after) in proc
+                .params
+                .params
+                .iter()
+                .zip(nonlinear.min_args_after.iter())
+            {
+                if min_after > &args_left {
+                    continue;
+                }
+                match param {
+                    Param::Mandatory(i) => {
+                        expected_at_most += 1;
+                        frame.register_mut()[*i as usize] = match args.next() {
+                            Some(value) => {
+                                args_left -= 1;
+                                value
+                            }
+                            None => {
+                                return Err(SendError::Exception(Value::Ref(Exception::new(
+                                    format!("missing mandatory argument"),
+                                    self.trace(),
+                                    self.context().exceptions().argument_error.clone(),
+                                ))));
+                            }
                         }
                     }
+                    Param::Optional(i) => {
+                        expected_at_most += 1;
+                        frame.register_mut()[*i as usize] = match args.next() {
+                            Some(value) => {
+                                args_left -= 1;
+                                value
+                            }
+                            None => ARGUMENT_NOT_GIVEN.clone(),
+                        }
+                    }
+                    _ => unimplemented!("other param types"),
                 }
-                _ => unimplemented!("other param types"),
             }
+        } else {
+            for param in &proc.params.params {
+                match param {
+                    Param::Mandatory(i) => {
+                        expected_at_most += 1;
+                        frame.register_mut()[*i as usize] = match args.args.next() {
+                            Some(value) => value,
+                            None => {
+                                return Err(SendError::Exception(Value::Ref(Exception::new(
+                                    format!("missing mandatory argument"),
+                                    self.trace(),
+                                    self.context().exceptions().argument_error.clone(),
+                                ))));
+                            }
+                        }
+                    }
+                    Param::Optional(i) => {
+                        expected_at_most += 1;
+                        frame.register_mut()[*i as usize] = match args.args.next() {
+                            Some(value) => value,
+                            None => ARGUMENT_NOT_GIVEN.clone(),
+                        }
+                    }
+                    _ => unimplemented!("other param types"),
+                }
+            }
+        }
+
+        if let Some(_) = args.args.next() {
+            return Err(SendError::Exception(Value::Ref(Exception::new(
+                match expected_at_most {
+                    0 => format!("expected no arguments"),
+                    1 => format!("expected at most one argument"),
+                    n => format!("expected at most {} arguments", n),
+                },
+                self.trace(),
+                self.context().exceptions().argument_error.clone(),
+            ))));
+        }
+
+        if let Some(block) = args.block {
+            frame.register_mut()[proc.params.block as usize] = block;
         }
 
         Ok(())
@@ -479,15 +555,16 @@ impl Thread {
     fn op_append_string(&mut self) -> OpResult {
         let recv = self.read_addr()?;
         let append = self.read_addr()?;
-        let register = &mut self.frames.top_mut().unwrap().register_mut();
-        let append = match &register[append] {
-            Value::String(append) => append.clone(),
-            _ => unimplemented!("stringify"),
+        let (append, mut recv_obj) = {
+            let register = self.frames.top_mut().unwrap().register_mut();
+            (register[append].clone(), register[recv].clone())
         };
-        match &mut register[recv] {
-            Value::String(recv) => recv.push_str(&append),
-            _ => unimplemented!("append string to non-string"),
-        }
+        let out = recv_obj.send(
+            Symbol::ADD,
+            Arguments::new(&mut iter::once(append), None),
+            self,
+        )?;
+        self.frames.top_mut().unwrap().register_mut()[recv] = out;
         Ok(None)
     }
     #[inline]
@@ -598,7 +675,7 @@ impl Thread {
         let out = self.read_addr()?;
         let value = self.read_addr()?;
         let register = &mut self.frames.top_mut().unwrap().register_mut();
-        register[out] = Value::Bool(register[value].is_truthy());
+        register[out] = Value::Bool(!register[value].is_truthy());
         Ok(None)
     }
     #[inline]
@@ -896,7 +973,12 @@ impl Thread {
     }
     #[inline]
     fn op_param_fallback(&mut self) -> OpResult {
-        unimplemented!()
+        let var = self.read_addr()?;
+        let jump = self.read_addr()?;
+        if self.frames.top_mut().unwrap().register_mut()[var] != *ARGUMENT_NOT_GIVEN {
+            self.pc = jump;
+        }
+        Ok(None)
     }
 }
 

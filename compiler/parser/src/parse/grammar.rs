@@ -911,7 +911,7 @@ sapphire_parser_gen::parser! {
     }
 
     arguments_without_parens: Arguments = {
-        token!(PLParen) wss a: opt!(argument_list) wss token!(PLParen) => (a.unwrap_or_default()),
+        token!(PLParen) wss a: opt!(argument_list) wss token!(PRParen) => (a.unwrap_or_default()),
         argument_list,
     }
     argument_list: Arguments = {

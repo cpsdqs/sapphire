@@ -2,7 +2,7 @@ use crate::compile;
 use crate::context::Context;
 use crate::exception::Exception;
 use crate::heap::Ref;
-use crate::object::{Arguments, Object, RbClass, SendError};
+use crate::object::{Arguments, Object, RbClass, RbObject, SendError};
 use crate::proc::Proc;
 use crate::read_args;
 use crate::symbol::Symbol;
@@ -32,6 +32,10 @@ pub fn init(context: &Arc<Context>) {
     module.def_method(symbols.symbol("attr_accessor"), Proc::Native(attr_accessor));
     module.def_method(symbols.symbol("attr_reader"), Proc::Native(attr_reader));
     module.def_method(symbols.symbol("attr_writer"), Proc::Native(attr_writer));
+
+    let mut class_ref = context.class_class().get();
+    let class: &mut RbClass = Object::downcast_mut(&mut *class_ref).unwrap();
+    class.def_method(Symbol::NEW, Proc::Native(new));
 }
 
 fn assert_is_module(other: &Ref<Object>, thread: &mut Thread) -> Result<(), SendError> {
@@ -248,3 +252,52 @@ macro_rules! attr_accessor {
 attr_accessor!(attr_accessor, reader, writer);
 attr_accessor!(attr_reader, reader,);
 attr_accessor!(attr_writer, , writer);
+
+fn new(recv: Value, mut args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+    let class = match recv {
+        Value::Ref(class) => class,
+        _ => {
+            return Err(SendError::Exception(Value::Ref(Exception::new(
+                format!("cannot call Class#new on a primitive"),
+                thread.trace(),
+                thread.context().exceptions().type_error.clone(),
+            ))));
+        }
+    };
+
+    let allocator = class.get().send(
+        Symbol::METHOD,
+        Arguments::new(
+            &mut iter::once(Value::Symbol(Symbol::SAPPHIRE_ALLOCATE)),
+            None,
+        ),
+        thread,
+    )?;
+
+    let mut object = match allocator {
+        Value::Proc(Proc::Native(proc)) => {
+            struct AllocArgs<'a, 'b: 'a>(&'a mut Arguments<'b>, Option<Value>);
+            impl<'a, 'b> Iterator for AllocArgs<'a, 'b> {
+                type Item = Value;
+                fn next(&mut self) -> Option<Value> {
+                    if let Some(class) = self.1.take() {
+                        Some(class)
+                    } else {
+                        self.0.args.next()
+                    }
+                }
+            }
+
+            let block = args.block.clone();
+
+            thread.call(
+                Value::Nil,
+                Proc::Native(proc),
+                Arguments::new(&mut AllocArgs(&mut args, Some(Value::Ref(class))), block),
+            )?
+        }
+        _ => Value::Ref(RbObject::new(class)),
+    };
+    object.send(Symbol::INITIALIZE, args, thread)?;
+    Ok(object)
+}

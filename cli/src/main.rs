@@ -6,6 +6,7 @@ use sapphire::compiler::{compile, compile_ir};
 use sapphire::context::Context;
 use sapphire::object::{Arguments, Object, SendError};
 use sapphire::proc::Proc;
+use sapphire::symbol::Symbol;
 use sapphire::thread::Thread;
 use sapphire::value::Value;
 use std::io::{self, Read};
@@ -21,7 +22,7 @@ fn main() {
         let mut ir = false;
         let mut byte = false;
         let mut exec = true;
-        let mut time = true;
+        let mut time = false;
 
         let context = Arc::new(Context::new());
         let mut line_accum = String::new();
@@ -125,21 +126,34 @@ fn main() {
                                     proc,
                                     Arguments::empty(),
                                 ) {
-                                    Ok(res) => {
-                                        println!("-> \x1b[32m{}\x1b[m", res.inspect(&context))
+                                    Ok(mut res) => {
+                                        let inspected = match res.send(
+                                            Symbol::INSPECT,
+                                            Arguments::empty(),
+                                            &mut thread,
+                                        ) {
+                                            Ok(Value::String(inspected)) => inspected,
+                                            _ => res.inspect(&context),
+                                        };
+                                        println!("-> \x1b[32m{}\x1b[m", inspected);
                                     }
                                     Err(err) => match err {
                                         SendError::Exception(exception) => {
-                                            eprintln!("Exception: {}", exception.inspect(&context));
+                                            eprintln!(
+                                                "\x1b[31mException: {}\x1b[m",
+                                                exception.inspect(&context)
+                                            );
                                         }
                                         SendError::Thread(err) => {
-                                            eprintln!("Thread error: {:?}", err);
+                                            eprintln!("\x1b[31;1mThread error: {:?}\x1b[m", err);
                                         }
                                     },
                                 }
                                 let end = Instant::now();
 
-                                eprintln!("took {:?}", end - start);
+                                if time {
+                                    eprintln!("took {:?}", end - start);
+                                }
                             }
                         }
                     }

@@ -238,6 +238,67 @@ pub struct Params<T: SymbolTable> {
     pub params: SmallVec<[Param<T::Symbol>; 8]>,
     /// The register for the block parameter.
     pub block: u16,
+    /// If None, parameters are in the order `mandatory, optional, splat`
+    pub nonlinear: Option<NonLinearParams>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NonLinearParams {
+    pub min_args_after: SmallVec<[usize; 8]>,
+}
+
+impl<T: SymbolTable> Params<T> {
+    pub(crate) fn update_linear(&mut self) {
+        let mut is_linear = true;
+        let mut state = 0;
+
+        for param in &self.params {
+            match (state, param) {
+                (0, Param::Mandatory(..)) => (),
+                (0, Param::Optional(..)) => state = 1,
+                (1, Param::Optional(..)) => (),
+                (1, Param::Splat(..)) => state = 2,
+                _ => {
+                    is_linear = false;
+                    break;
+                }
+            }
+        }
+
+        if is_linear {
+            self.nonlinear = None;
+        } else {
+            let splat_pos = self.params.iter().position(|p| match p {
+                Param::Splat(..) => true,
+                _ => false,
+            });
+
+            let mut min_args_after_rev = Vec::new();
+            let mut mandatory_args = 0;
+
+            let mut i = self.params.len();
+            for param in self.params.iter().rev() {
+                i -= 1;
+                if Some(i) == splat_pos {
+                    mandatory_args = 0;
+                    continue;
+                }
+
+                match param {
+                    Param::Mandatory(..) | Param::Hash(..) => {
+                        mandatory_args += 1;
+                        min_args_after_rev.push(0);
+                    }
+                    Param::Optional(..) => min_args_after_rev.push(mandatory_args),
+                    Param::Splat(..) => panic!("more than one splat in params"),
+                }
+            }
+
+            self.nonlinear = Some(NonLinearParams {
+                min_args_after: min_args_after_rev.into_iter().rev().collect(),
+            });
+        }
+    }
 }
 
 impl<T: SymbolTable> Clone for Params<T> {
@@ -245,6 +306,7 @@ impl<T: SymbolTable> Clone for Params<T> {
         Params {
             params: SmallVec::clone(&self.params),
             block: self.block,
+            nonlinear: self.nonlinear.clone(),
         }
     }
 }
@@ -346,14 +408,17 @@ impl ConstParams {
         f: &mut F,
         root: &ConstProc,
     ) -> Params<T> {
-        Params {
+        let mut params = Params {
             params: self
                 .params
                 .iter()
                 .map(|param| param.new::<T, F>(proc, f, root))
                 .collect(),
             block: self.block,
-        }
+            nonlinear: None,
+        };
+        params.update_linear();
+        params
     }
 }
 

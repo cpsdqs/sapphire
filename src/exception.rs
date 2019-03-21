@@ -4,6 +4,7 @@ use crate::context::Context;
 use crate::heap::{Ref, Weak};
 use crate::object::{send, Arguments, ClassName, Object, RbClass, SendError};
 use crate::proc::Proc;
+use crate::read_args;
 use crate::symbol::{Symbol, Symbols};
 use crate::thread::Thread;
 use crate::value::Value;
@@ -109,7 +110,7 @@ impl Exceptions {
     ) -> Exceptions {
         // TODO: use macros or ruby for this
         macro_rules! def_exceptions {
-            ($($name:ident, $sym:expr, $super:expr;)+) => {
+            ($($name:ident, $sym:expr, $super:expr;)+ $block:block) => {
                 $(
                 let $name = RbClass::new_unchecked(
                     ClassName::Name(symbols.symbol($sym)),
@@ -127,6 +128,8 @@ impl Exceptions {
                     )+
                 }
 
+                $block
+
                 Exceptions {
                     $($name,)+
                 }
@@ -141,6 +144,42 @@ impl Exceptions {
             no_method_error, "NoMethodError", name_error;
             argument_error, "ArgumentError", standard_error;
             type_error, "TypeError", standard_error;
+            {
+                let mut exception_ref = exception.get();
+                let exception: &mut RbClass = Object::downcast_mut(&mut *exception_ref).unwrap();
+
+                exception.def_method(Symbol::SAPPHIRE_ALLOCATE, Proc::Native(allocate_exception));
+                exception.def_method(Symbol::INITIALIZE, Proc::Native(init_exception));
+            }
         }
     }
+}
+
+fn allocate_exception(_: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+    read_args!(args, thread; class: Ref, *);
+    Ok(Value::Ref(Exception::new(
+        String::new(),
+        thread.trace(),
+        class,
+    )))
+}
+
+fn init_exception(recv: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
+    read_args!(args, thread; message: String);
+
+    match recv {
+        Value::Ref(recv) => match Object::downcast_mut::<Exception>(&mut *recv.get()) {
+            Some(exception) => exception.message = message,
+            _ => (),
+        },
+        _ => {
+            return Err(SendError::Exception(Value::Ref(Exception::new(
+                format!("invalid primitive exception"),
+                thread.trace(),
+                thread.context().exceptions().type_error.clone(),
+            ))));
+        }
+    }
+
+    Ok(Value::Nil)
 }

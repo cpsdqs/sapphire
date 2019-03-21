@@ -166,7 +166,7 @@ macro_rules! read_args {
     (__impl $args:expr, $thread:expr, $c:expr;) => {
         match $args.args.next() {
             Some(_) => return Err(SendError::Exception(Value::Ref(Exception::new(
-                match $c - 1 {
+                match $c {
                     0 => format!("Expected no arguments"),
                     1 => format!("Expected at most one argument"),
                     c => format!("Expected at most {} arguments", c),
@@ -482,10 +482,12 @@ impl Object for RbClass {
         thread: &mut Thread,
     ) -> Result<Value, SendError> {
         match name {
-            Symbol::NEW if !self.is_singleton_class() => {
-                let object = RbObject::new(self.self_ref.upgrade().unwrap());
-                object.get().send(Symbol::INITIALIZE, args, thread)?;
-                Ok(Value::Ref(object))
+            Symbol::NEW if self.is_singleton_class() => {
+                Err(SendError::Exception(Value::Ref(Exception::new(
+                    format!("cannot instantiate a singleton class"),
+                    thread.trace(),
+                    thread.context().exceptions().type_error.clone(),
+                ))))
             }
             Symbol::METHOD => {
                 read_args!(args, thread; name: Symbol);

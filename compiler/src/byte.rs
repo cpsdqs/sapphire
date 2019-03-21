@@ -404,7 +404,7 @@ impl<T: SymbolTable> IRProc<T> {
             param_list.push(Param::Hash(map));
         }
 
-        let params = Params {
+        let mut params = Params {
             params: param_list,
             block: self
                 .params
@@ -416,7 +416,9 @@ impl<T: SymbolTable> IRProc<T> {
                     Var::Local(i) => registers[&i],
                 })
                 .unwrap_or(VOID) as u16,
+            nonlinear: None,
         };
+        params.update_linear();
 
         let block_idx = self.block_var.map_or(None, |var| match var {
             Var::Local(i) => registers.get(&i).map(|i| *i),

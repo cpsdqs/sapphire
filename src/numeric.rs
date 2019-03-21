@@ -115,6 +115,10 @@ impl Object for i64 {
                     _ => Ok(Value::Bool(false)),
                 }
             }
+            Symbol::TO_S => {
+                read_args!(args, thread; -);
+                Ok(Value::String(format!("{}", self)))
+            }
             _ => send(
                 Value::Fixnum(*self),
                 thread.context().fixnum_class().clone(),
@@ -181,6 +185,10 @@ impl Object for f64 {
                 Some(_) => Ok(Value::Bool(false)),
                 _ => unimplemented!("argument error"),
             },
+            Symbol::TO_S => {
+                read_args!(args, thread; -);
+                Ok(Value::String(format!("{}", self)))
+            }
             _ => send(
                 Value::Float(*self),
                 thread.context().fixnum_class().clone(),
