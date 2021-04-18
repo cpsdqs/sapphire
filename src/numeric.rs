@@ -131,10 +131,10 @@ impl Object for i64 {
     fn inspect(&self, _: &Context) -> String {
         format!("{:?}", self)
     }
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
@@ -201,10 +201,10 @@ impl Object for f64 {
     fn inspect(&self, _: &Context) -> String {
         format!("{:?}", self)
     }
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }

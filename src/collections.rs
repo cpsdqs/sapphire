@@ -10,35 +10,31 @@ use crate::symbol::Symbol;
 use crate::thread::Thread;
 use crate::value::Value;
 use std::any::Any;
-use std::mem;
 use std::sync::Arc;
 
 /// A Ruby array.
 #[derive(Debug, Clone)]
 pub struct Array {
     inner: Vec<Value>,
-    self_ref: Weak<Object>,
+    self_ref: Weak<dyn Object>,
 }
 
 impl Array {
     /// Creates a new array.
-    pub fn new() -> Ref<Object> {
+    pub fn new() -> Ref<dyn Object> {
         Self::new_with(Vec::new())
     }
 
     /// Wraps a Vec to create an array.
-    pub fn new_with(inner: Vec<Value>) -> Ref<Object> {
+    pub fn new_with(inner: Vec<Value>) -> Ref<dyn Object> {
         let array = Ref::new(Array {
             inner,
-            self_ref: unsafe { mem::uninitialized() },
+            self_ref: Weak::new_null(),
         });
         let self_ref = array.downgrade();
-        mem::forget(mem::replace(
-            &mut Object::downcast_mut::<Array>(&mut *array.get())
-                .unwrap()
-                .self_ref,
-            self_ref,
-        ));
+        Object::downcast_mut::<Array>(&mut *array.get())
+            .unwrap()
+            .self_ref = self_ref;
         array
     }
 }
@@ -160,10 +156,10 @@ impl Object for Array {
         }
         format!("[{}]", contents)
     }
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }

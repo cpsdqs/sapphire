@@ -6,5 +6,5 @@ edition = "2018"
 
 [dependencies]
 atty = "0.2"
-rustyline = "3.0"
+rustyline = "8.0"
 sapphire = { path = ".." }

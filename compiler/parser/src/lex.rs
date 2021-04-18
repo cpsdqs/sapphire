@@ -76,21 +76,21 @@ macro_rules! opt {
 named!(line_terminator<&str, ()>, do_parse!(opt!(char!('\r')) >> char!('\n') >> ()));
 named!(line_terminator_escape<&str, ()>, do_parse!(char!('\\') >> line_terminator >> ()));
 
-/// Whitespace
+// Whitespace
 named!(ws<&str, ()>, alt_complete!(
     do_parse!(one_of!("\x09\x0b\x0c\x0d\x20") >> ())
     | line_terminator_escape
 ));
 
-/// Takes the rest of the line.
+// Takes the rest of the line.
 named!(rest_of_line<&str, &str>, recognize!(many_until!(take!(1), line_terminator)));
 
-/// Consumes a single line comment
+// Consumes a single line comment
 named!(single_line_comment<&str, ()>, do_parse!(
     tag!("#") >> rest_of_line >> ()
 ));
 
-/// Consumes a multi-line comment. Must only be used at the beginning of a line.
+// Consumes a multi-line comment. Must only be used at the beginning of a line.
 named!(l_multi_line_comment<&str, ()>, do_parse!(
     tag!("=begin") >>
     // rest of begin line
@@ -102,8 +102,8 @@ named!(l_multi_line_comment<&str, ()>, do_parse!(
     ()
 ));
 
-/// Consumes an end marker.
-/// Must only be used at the beginning of a line.
+// Consumes an end marker.
+// Must only be used at the beginning of a line.
 named!(l_end_marker<&str, ()>, do_parse!(
     tag!("__END__") >> alt_complete!(line_terminator | do_parse!(eof!() >> ())) >> ()
 ));

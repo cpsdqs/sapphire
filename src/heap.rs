@@ -29,9 +29,23 @@ pub struct Ref<T: ?Sized>(Arc<ReentrantMutex<T>>);
 #[derive(Default)]
 pub struct Weak<T: ?Sized>(WeakArc<ReentrantMutex<T>>);
 
-impl Ref<Object> {
-    pub fn new<T: Object + 'static>(this: T) -> Ref<Object> {
+impl Ref<dyn Object> {
+    pub fn new<T: Object + 'static>(this: T) -> Ref<dyn Object> {
         Ref(Arc::new(ReentrantMutex::new(this)))
+    }
+
+    pub fn new_null() -> Ref<dyn Object> {
+        Ref(Arc::new(ReentrantMutex::new(())))
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref NULL_WEAK: Ref<dyn Object> = Ref::new_null();
+}
+
+impl Weak<dyn Object> {
+    pub fn new_null() -> Weak<dyn Object> {
+        NULL_WEAK.downgrade()
     }
 }
 

@@ -51,6 +51,23 @@ impl Object for Proc {
     ) -> Result<Value, SendError> {
         match name {
             Symbol::CLASS => Ok(Value::Ref(thread.context().proc_class().clone())),
+            Symbol::CALL => {
+                // FIXME: this is incorrect behavior: the receiver is bound at creation time and
+                // shouldn't fall back to nil
+                let recv = match &self {
+                    Proc::Sapphire(proc) => proc
+                        .parent_registers
+                        .last()
+                        .map(|r| r.get(SELF))
+                        .unwrap_or(Value::Nil),
+                    Proc::Native(_) => Value::Nil,
+                };
+
+                match self {
+                    Proc::Sapphire(_) => thread.call(recv, self.clone(), args),
+                    Proc::Native(f) => f(recv, args, thread),
+                }
+            }
             name => send(
                 Value::Proc(self.clone()),
                 thread.context().proc_class().clone(),
@@ -69,10 +86,10 @@ impl Object for Proc {
             Proc::Native(proc) => format!("<Proc {:?}>", *proc as *const ()),
         }
     }
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }

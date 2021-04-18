@@ -10,7 +10,7 @@ use crate::value::Value;
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::any::Any;
-use std::{iter, mem};
+use std::iter;
 
 /// A generic object.
 pub trait Object: Send + Any {
@@ -30,12 +30,12 @@ pub trait Object: Send + Any {
 
     // TODO: remove these when TypeId::type_id() is stable
     /// Helper method for downcasting.
-    fn as_any(&self) -> &Any;
+    fn as_any(&self) -> &dyn Any;
     /// Helper method for downcasting.
-    fn as_any_mut(&mut self) -> &mut Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-impl Object {
+impl dyn Object {
     /// Attempts to downcast the object to the given type.
     pub fn downcast_ref<T: 'static + Object>(this: &dyn Object) -> Option<&T> {
         this.as_any().downcast_ref()
@@ -223,20 +223,20 @@ macro_rules! read_args {
 pub struct RbModule {
     name: Symbol,
     vars: FnvHashMap<Symbol, Value>,
-    modules: SmallVec<[Ref<Object>; 16]>,
+    modules: SmallVec<[Ref<dyn Object>; 16]>,
     methods: FnvHashMap<Symbol, Proc>,
     method_cache: FnvHashMap<Symbol, Proc>,
-    class: Ref<Object>,
-    singleton_class: Option<Ref<Object>>,
-    self_ref: Weak<Object>,
+    class: Ref<dyn Object>,
+    singleton_class: Option<Ref<dyn Object>>,
+    self_ref: Weak<dyn Object>,
 }
 
 impl RbModule {
-    pub fn new(name: Symbol, context: &Context) -> Ref<Object> {
+    pub fn new(name: Symbol, context: &Context) -> Ref<dyn Object> {
         Self::new_unchecked(name, context.module_class().clone())
     }
 
-    pub(crate) fn new_unchecked(name: Symbol, class: Ref<Object>) -> Ref<Object> {
+    pub(crate) fn new_unchecked(name: Symbol, class: Ref<dyn Object>) -> Ref<dyn Object> {
         let this = Ref::new(RbModule {
             name,
             vars: FnvHashMap::default(),
@@ -245,15 +245,12 @@ impl RbModule {
             method_cache: FnvHashMap::default(),
             class,
             singleton_class: None,
-            self_ref: unsafe { mem::uninitialized() },
+            self_ref: Weak::new_null(),
         });
         let this_ref = this.downgrade();
-        mem::forget(mem::replace(
-            &mut Object::downcast_mut::<RbModule>(&mut *this.get())
-                .unwrap()
-                .self_ref,
-            this_ref,
-        ));
+        Object::downcast_mut::<RbModule>(&mut *this.get())
+            .unwrap()
+            .self_ref = this_ref;
         this
     }
 
@@ -361,34 +358,34 @@ impl Object for RbModule {
             context.symbols().symbol_name(self.name).unwrap_or("?")
         )
     }
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
 
 pub(crate) enum ClassName {
     Name(Symbol),
-    Singleton(Weak<Object>),
+    Singleton(Weak<dyn Object>),
 }
 
 /// A generic class.
 pub struct RbClass {
     name: ClassName,
     class_vars: FnvHashMap<Symbol, Value>,
-    modules: SmallVec<[Ref<Object>; 16]>,
+    modules: SmallVec<[Ref<dyn Object>; 16]>,
     methods: FnvHashMap<Symbol, Proc>,
     method_cache: FnvHashMap<Symbol, Proc>,
-    class: Ref<Object>,
-    singleton_class: Option<Ref<Object>>,
-    superclass: Ref<Object>,
-    self_ref: Weak<Object>,
+    class: Ref<dyn Object>,
+    singleton_class: Option<Ref<dyn Object>>,
+    superclass: Ref<dyn Object>,
+    self_ref: Weak<dyn Object>,
 }
 
 impl RbClass {
-    pub fn new(name: Symbol, superclass: Ref<Object>, context: &Context) -> Ref<Object> {
+    pub fn new(name: Symbol, superclass: Ref<dyn Object>, context: &Context) -> Ref<dyn Object> {
         Self::new_unchecked(
             ClassName::Name(name),
             superclass,
@@ -396,7 +393,11 @@ impl RbClass {
         )
     }
 
-    fn new_singleton(receiver: Weak<Object>, class: Ref<Object>, context: &Context) -> Ref<Object> {
+    fn new_singleton(
+        receiver: Weak<dyn Object>,
+        class: Ref<dyn Object>,
+        context: &Context,
+    ) -> Ref<dyn Object> {
         Self::new_unchecked(
             ClassName::Singleton(receiver),
             class,
@@ -406,9 +407,9 @@ impl RbClass {
 
     pub(crate) fn new_unchecked(
         name: ClassName,
-        superclass: Ref<Object>,
-        class: Ref<Object>,
-    ) -> Ref<Object> {
+        superclass: Ref<dyn Object>,
+        class: Ref<dyn Object>,
+    ) -> Ref<dyn Object> {
         let this = Ref::new(RbClass {
             name,
             class_vars: FnvHashMap::default(),
@@ -418,15 +419,12 @@ impl RbClass {
             class,
             singleton_class: None,
             superclass,
-            self_ref: unsafe { mem::uninitialized() },
+            self_ref: Weak::new_null(),
         });
         let this_ref = this.downgrade();
-        mem::forget(mem::replace(
-            &mut Object::downcast_mut::<RbClass>(&mut *this.get())
-                .unwrap()
-                .self_ref,
-            this_ref,
-        ));
+        Object::downcast_mut::<RbClass>(&mut *this.get())
+            .unwrap()
+            .self_ref = this_ref;
         this
     }
 
@@ -506,7 +504,7 @@ impl RbClass {
         ));
     }
 
-    pub(crate) fn singleton_class(&self) -> Option<&Ref<Object>> {
+    pub(crate) fn singleton_class(&self) -> Option<&Ref<dyn Object>> {
         self.singleton_class.as_ref()
     }
 }
@@ -584,10 +582,10 @@ impl Object for RbClass {
             },
         }
     }
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
@@ -595,7 +593,7 @@ impl Object for RbClass {
 /// Default send implementation: will try to call the method or `method_missing`.
 pub fn send(
     mut this: Value,
-    class: Ref<Object>,
+    class: Ref<dyn Object>,
     name: Symbol,
     args: Arguments,
     thread: &mut Thread,
@@ -645,26 +643,23 @@ pub fn send(
 /// A generic object.
 pub struct RbObject {
     ivars: FnvHashMap<Symbol, Value>,
-    class: Ref<Object>,
-    singleton_class: Option<Ref<Object>>,
-    self_ref: Weak<Object>,
+    class: Ref<dyn Object>,
+    singleton_class: Option<Ref<dyn Object>>,
+    self_ref: Weak<dyn Object>,
 }
 
 impl RbObject {
-    pub fn new(class: Ref<Object>) -> Ref<Object> {
+    pub fn new(class: Ref<dyn Object>) -> Ref<dyn Object> {
         let this = Ref::new(RbObject {
             ivars: FnvHashMap::default(),
             class,
             singleton_class: None,
-            self_ref: unsafe { mem::uninitialized() },
+            self_ref: Weak::new_null(),
         });
         let weak = this.downgrade();
-        mem::forget(mem::replace(
-            &mut Object::downcast_mut::<RbObject>(&mut *this.get())
-                .unwrap()
-                .self_ref,
-            weak,
-        ));
+        Object::downcast_mut::<RbObject>(&mut *this.get())
+            .unwrap()
+            .self_ref = weak;
         this
     }
 
@@ -714,48 +709,48 @@ impl Object for RbObject {
         let class = self.class.get().inspect(context);
         format!("<{}:{:?}>", class, self as *const Self)
     }
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
 
 /// Creates the object class, class class, and module class (return value is in that order).
-pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object>) {
-    let object_class: Ref<Object> = Ref::new(RbClass {
+pub fn init_root(symbols: &mut Symbols) -> (Ref<dyn Object>, Ref<dyn Object>, Ref<dyn Object>) {
+    let object_class: Ref<dyn Object> = Ref::new(RbClass {
         name: ClassName::Name(symbols.symbol("Object")),
         class_vars: FnvHashMap::default(),
         modules: SmallVec::new(),
         methods: FnvHashMap::default(),
         method_cache: FnvHashMap::default(),
-        class: unsafe { mem::uninitialized() },
+        class: Ref::new_null(),
         singleton_class: None,
-        superclass: unsafe { mem::uninitialized() },
-        self_ref: unsafe { mem::uninitialized() },
+        superclass: Ref::new_null(),
+        self_ref: Weak::new_null(),
     });
-    let module_class: Ref<Object> = Ref::new(RbClass {
+    let module_class: Ref<dyn Object> = Ref::new(RbClass {
         name: ClassName::Name(symbols.symbol("Module")),
         class_vars: FnvHashMap::default(),
         modules: SmallVec::new(),
         methods: FnvHashMap::default(),
         method_cache: FnvHashMap::default(),
-        class: unsafe { mem::uninitialized() },
+        class: Ref::new_null(),
         singleton_class: None,
         superclass: object_class.clone(),
-        self_ref: unsafe { mem::uninitialized() },
+        self_ref: Weak::new_null(),
     });
-    let class_class: Ref<Object> = Ref::new(RbClass {
+    let class_class: Ref<dyn Object> = Ref::new(RbClass {
         name: ClassName::Name(symbols.symbol("Class")),
         class_vars: FnvHashMap::default(),
         modules: SmallVec::new(),
         methods: FnvHashMap::default(),
         method_cache: FnvHashMap::default(),
-        class: unsafe { mem::uninitialized() },
+        class: Ref::new_null(),
         singleton_class: None,
         superclass: module_class.clone(),
-        self_ref: unsafe { mem::uninitialized() },
+        self_ref: Weak::new_null(),
     });
 
     let object_class_ref = object_class.clone();
@@ -770,29 +765,14 @@ pub fn init_root(symbols: &mut Symbols) -> (Ref<Object>, Ref<Object>, Ref<Object
         let module_class = Object::downcast_mut::<RbClass>(&mut *module_class_i).unwrap();
         let class_class = Object::downcast_mut::<RbClass>(&mut *class_class_i).unwrap();
 
-        mem::forget(mem::replace(
-            &mut object_class.self_ref,
-            object_class_ref.downgrade(),
-        ));
-        mem::forget(mem::replace(
-            &mut class_class.self_ref,
-            class_class_ref.downgrade(),
-        ));
-        mem::forget(mem::replace(
-            &mut module_class.self_ref,
-            module_class_ref.downgrade(),
-        ));
+        object_class.self_ref = object_class_ref.downgrade();
+        class_class.self_ref = class_class_ref.downgrade();
+        module_class.self_ref = module_class_ref.downgrade();
 
-        mem::forget(mem::replace(
-            &mut object_class.class,
-            class_class_ref.clone(),
-        ));
-        mem::forget(mem::replace(&mut object_class.superclass, object_class_ref));
-        mem::forget(mem::replace(
-            &mut module_class.class,
-            class_class_ref.clone(),
-        ));
-        mem::forget(mem::replace(&mut class_class.class, class_class_ref));
+        object_class.class = class_class_ref.clone();
+        object_class.superclass = object_class_ref;
+        module_class.class = class_class_ref.clone();
+        class_class.class = class_class_ref;
 
         fn init(_: Value, args: Arguments, thread: &mut Thread) -> Result<Value, SendError> {
             read_args!(args, thread; -);

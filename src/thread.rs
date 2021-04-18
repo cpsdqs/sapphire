@@ -36,6 +36,24 @@ pub enum Register {
     Detached(Ref<RegisterInner>),
 }
 
+impl Register {
+    pub fn get(&self, index: usize) -> Value {
+        match self {
+            Register::Local(r) => r.index(index).clone(),
+            Register::Detached(r) => r.get().index(index).clone(),
+        }
+    }
+    pub fn set(&self, index: usize, value: Value) -> Result<(), ()> {
+        match self {
+            Register::Local(_) => Err(()),
+            Register::Detached(r) => {
+                *r.get().index_mut(index) = value;
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Register reference.
 enum RegisterMut<'a> {
     Local(&'a mut RegisterInner),
@@ -100,7 +118,7 @@ impl Frame {
     fn detach_register(&mut self) -> Register {
         match &self.register {
             Register::Local(..) => {
-                let register = mem::replace(&mut self.register, unsafe { mem::uninitialized() });
+                let register = mem::replace(&mut self.register, unsafe { mem::zeroed() });
                 if let Register::Local(register) = register {
                     mem::forget(mem::replace(
                         &mut self.register,
@@ -123,7 +141,7 @@ pub struct Thread {
     frames: Stack<Frame>,
     pcs: Stack<usize>,
     rescues: Stack<(usize, usize)>,
-    modules: Stack<Ref<Object>>,
+    modules: Stack<Ref<dyn Object>>,
     pc: usize,
     arg_builder: ArgumentBuilder,
     exception: Option<Value>,
@@ -140,6 +158,7 @@ enum ThreadResult {
 
 /// VM-level errors.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ThreadError {
     /// Recursion too deep.
     StackOverflow,
@@ -149,6 +168,10 @@ pub enum ThreadError {
     InvalidOperation(u8),
     /// Bytecode: the referenced static value is of the wrong type.
     InvalidStatic,
+    /// The parent register is not detached.
+    InvalidLocalParentRegister,
+    /// Bytecode: the referenced parent scope does not exist.
+    InvalidParentDepth(usize),
     /// Bytecode ended unexpectedly.
     UnexpectedEnd,
 }
@@ -340,7 +363,7 @@ impl Thread {
             AddressingMode::U16 => match (proc.code.get(self.pc), proc.code.get(self.pc + 1)) {
                 (Some(i), Some(j)) => {
                     self.pc += 2;
-                    Ok(((*i as usize) << 8) & *j as usize)
+                    Ok(u16::from_le_bytes([*i, *j]) as usize)
                 }
                 _ => Err(ThreadError::UnexpectedEnd),
             },
@@ -356,6 +379,28 @@ impl Thread {
         match self.read_static()? {
             CStatic::Sym(sym) => Ok(*sym),
             _ => Err(ThreadError::InvalidStatic),
+        }
+    }
+
+    fn read_parent_addr(&mut self) -> Result<(usize, usize), ThreadError> {
+        let proc = &self
+            .frames
+            .top()
+            .expect("read_parent_addr without frame")
+            .proc;
+        let proc = proc.sapphire().unwrap();
+        match (
+            proc.code.get(self.pc),
+            proc.code.get(self.pc + 1),
+            proc.code.get(self.pc + 2),
+        ) {
+            (Some(i), Some(j), Some(d)) => {
+                self.pc += 3;
+                let addr = u16::from_le_bytes([*i, *j]) as usize;
+                let depth = *d as usize;
+                Ok((addr, depth))
+            }
+            _ => Err(ThreadError::UnexpectedEnd),
         }
     }
 
@@ -615,7 +660,17 @@ impl Thread {
     }
     #[inline]
     fn op_load_parent(&mut self) -> OpResult {
-        unimplemented!()
+        let out = self.read_addr()?;
+        let (var, depth) = self.read_parent_addr()?;
+        let frame = self.frames.top_mut().unwrap();
+        let parent_registers = &frame.proc.sapphire().unwrap().parent_registers;
+        match parent_registers.get(parent_registers.len().wrapping_sub(depth)) {
+            Some(register) => {
+                frame.register_mut()[out] = register.get(var);
+                Ok(None)
+            }
+            None => Err(ThreadError::InvalidParentDepth(depth).into()),
+        }
     }
     #[inline]
     fn op_arg(&mut self) -> OpResult {
@@ -752,7 +807,19 @@ impl Thread {
     }
     #[inline]
     fn op_assign_parent(&mut self) -> OpResult {
-        unimplemented!()
+        let (out, depth) = self.read_parent_addr()?;
+        let var = self.read_addr()?;
+        let frame = self.frames.top_mut().unwrap();
+        let parent_registers = &frame.proc.sapphire().unwrap().parent_registers;
+        match parent_registers.get(parent_registers.len().wrapping_sub(depth)) {
+            Some(register) => {
+                register
+                    .set(out, frame.register.get(var))
+                    .map_err(|_| ThreadError::InvalidLocalParentRegister)?;
+                Ok(None)
+            }
+            None => Err(ThreadError::InvalidParentDepth(depth).into()),
+        }
     }
     #[inline]
     fn op_begin_rescue(&mut self) -> OpResult {

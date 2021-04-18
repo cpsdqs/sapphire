@@ -10,7 +10,6 @@ use crate::thread::Thread;
 use crate::value::Value;
 use fnv::FnvHashMap;
 use std::any::Any;
-use std::mem;
 
 /// An exception.
 #[derive(Debug, Clone)]
@@ -22,26 +21,23 @@ pub struct Exception {
 
     // Standard object properties
     ivars: FnvHashMap<Symbol, Value>,
-    class: Ref<Object>,
-    self_ref: Weak<Object>,
+    class: Ref<dyn Object>,
+    self_ref: Weak<dyn Object>,
 }
 
 impl Exception {
-    pub fn new(message: String, trace: Vec<TraceItem>, class: Ref<Object>) -> Ref<Object> {
+    pub fn new(message: String, trace: Vec<TraceItem>, class: Ref<dyn Object>) -> Ref<dyn Object> {
         let this = Ref::new(Exception {
             message,
             trace,
             ivars: FnvHashMap::default(),
             class,
-            self_ref: unsafe { mem::uninitialized() },
+            self_ref: Weak::new_null(),
         });
         let weak = this.downgrade();
-        mem::forget(mem::replace(
-            &mut Object::downcast_mut::<Exception>(&mut *this.get())
-                .unwrap()
-                .self_ref,
-            weak,
-        ));
+        Object::downcast_mut::<Exception>(&mut *this.get())
+            .unwrap()
+            .self_ref = weak;
         this
     }
 }
@@ -82,10 +78,10 @@ impl Object for Exception {
         let class = self.class.get().inspect(context);
         format!("<{}:{:?} {:?}>", class, self as *const Self, self.message)
     }
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
@@ -93,20 +89,20 @@ impl Object for Exception {
 /// Standard exception classes.
 #[derive(Debug)]
 pub struct Exceptions {
-    pub exception: Ref<Object>,
-    pub standard_error: Ref<Object>,
-    pub zero_division_error: Ref<Object>,
-    pub name_error: Ref<Object>,
-    pub no_method_error: Ref<Object>,
-    pub argument_error: Ref<Object>,
-    pub type_error: Ref<Object>,
+    pub exception: Ref<dyn Object>,
+    pub standard_error: Ref<dyn Object>,
+    pub zero_division_error: Ref<dyn Object>,
+    pub name_error: Ref<dyn Object>,
+    pub no_method_error: Ref<dyn Object>,
+    pub argument_error: Ref<dyn Object>,
+    pub type_error: Ref<dyn Object>,
 }
 
 impl Exceptions {
     pub fn new(
         symbols: &mut Symbols,
-        object_class: Ref<Object>,
-        class_class: Ref<Object>,
+        object_class: Ref<dyn Object>,
+        class_class: Ref<dyn Object>,
     ) -> Exceptions {
         // TODO: use macros or ruby for this
         macro_rules! def_exceptions {

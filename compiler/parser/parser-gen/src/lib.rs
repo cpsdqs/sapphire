@@ -627,7 +627,10 @@ impl Rule {
                         match Rule::parse(&mut group.stream().into_iter())? {
                             Some(rule) => PatternItem::Rule(rule),
                             None => {
-                                return Err(format!("Empty group in pattern at {:?}", group.span()));
+                                return Err(format!(
+                                    "Empty group in pattern at {:?}",
+                                    group.span()
+                                ));
                             }
                         }
                     }

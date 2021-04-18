@@ -62,7 +62,7 @@ fn main() {
                         line = mem::replace(&mut line_accum, String::new());
                     }
 
-                    rl.add_history_entry(line.as_ref());
+                    rl.add_history_entry(&line);
 
                     match &*line {
                         ".ast" => {

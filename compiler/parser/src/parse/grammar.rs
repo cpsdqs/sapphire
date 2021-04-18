@@ -1,3 +1,5 @@
+#![allow(unused_parens)]
+
 use super::error::{Expected, ParseError};
 use super::parse;
 use crate::ast::*;

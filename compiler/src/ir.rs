@@ -930,7 +930,7 @@ impl<T: SymbolTable> IRProc<T> {
             });
         }
 
-        let mut variables = mem::replace(&mut self.variables, unsafe { mem::uninitialized() });
+        let mut variables = mem::replace(&mut self.variables, FnvHashMap::default());
         variables = variables
             .into_iter()
             .map(|(var, sym)| {
@@ -1000,12 +1000,7 @@ impl<T: SymbolTable> IRProc<T> {
 
     /// Strips useless items.
     fn strip_useless(&mut self) {
-        let mut items = mem::replace(&mut self.items, unsafe { mem::uninitialized() });
-        items = items
-            .into_iter()
-            .filter(|item| !item.is_useless())
-            .collect();
-        mem::forget(mem::replace(&mut self.items, items));
+        self.items.retain(|item| !item.is_useless());
     }
 
     fn expand_statement(

@@ -67,7 +67,7 @@ impl<T: SymbolTable> IRProc<T> {
                 match mode {
                     AddressingMode::U8 => code.push(Chunk::Byte($v as u8)),
                     AddressingMode::U16 => {
-                        let bytes = ($v as u16).to_ne_bytes();
+                        let bytes = ($v as u16).to_le_bytes();
                         code.push(Chunk::Byte(bytes[0]));
                         code.push(Chunk::Byte(bytes[1]));
                     }
@@ -177,7 +177,7 @@ impl<T: SymbolTable> IRProc<T> {
                     code.push(Chunk::Byte(Op::LOAD_PARENT));
                     addr_var!(out);
                     // always u16 followed by u8
-                    let addr = (parent_vars[parent_vars.len() - depth][&id] as u16).to_ne_bytes();
+                    let addr = (parent_vars[parent_vars.len() - depth][&id] as u16).to_le_bytes();
                     code.push(Chunk::Byte(addr[0]));
                     code.push(Chunk::Byte(addr[1]));
                     code.push(Chunk::Byte(depth as u8));
@@ -263,7 +263,7 @@ impl<T: SymbolTable> IRProc<T> {
                 IROp::AssignParent(id, depth, rhs) => {
                     code.push(Chunk::Byte(Op::ASSIGN_PARENT));
                     // always u16 followed by u8
-                    let addr = (parent_vars[parent_vars.len() - depth][&id] as u16).to_ne_bytes();
+                    let addr = (parent_vars[parent_vars.len() - depth][&id] as u16).to_le_bytes();
                     code.push(Chunk::Byte(addr[0]));
                     code.push(Chunk::Byte(addr[1]));
                     code.push(Chunk::Byte(depth as u8));
@@ -366,7 +366,7 @@ impl<T: SymbolTable> IRProc<T> {
                     match mode {
                         AddressingMode::U8 => IterOneOrTwoBytes(value as u8, None, 0),
                         AddressingMode::U16 => {
-                            let bytes = (value as u16).to_ne_bytes();
+                            let bytes = (value as u16).to_le_bytes();
                             IterOneOrTwoBytes(bytes[0], Some(bytes[1]), 0)
                         }
                     }

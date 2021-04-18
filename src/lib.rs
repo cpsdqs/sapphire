@@ -79,10 +79,7 @@ pub use value::Value;
 /// ).unwrap();
 ///
 /// // 1 + 1 = 2
-/// match result {
-///     Value::Fixnum(value) => assert_eq!(value, 2),
-///     _ => panic!("wrong data type"),
-/// }
+/// assert_eq!(result, Value::Fixnum(2));
 /// ```
 #[macro_export]
 macro_rules! compile {

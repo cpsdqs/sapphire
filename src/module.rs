@@ -41,7 +41,7 @@ pub fn init(context: &Arc<Context>) {
     class.def_method(Symbol::NEW, Proc::Native(new));
 }
 
-fn assert_is_module(other: &Ref<Object>, thread: &mut Thread) -> Result<(), SendError> {
+fn assert_is_module(other: &Ref<dyn Object>, thread: &mut Thread) -> Result<(), SendError> {
     let is_module = other
         .get()
         .send(
